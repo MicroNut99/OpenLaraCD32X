@@ -11,11 +11,11 @@ CD music, PCM sound effects and saving.
 - Sega Genesis / Mega Drive
 - Sega CD / Mega-CD
 - 32X
-- **MicroNut99's 4 MB RAM cart** (battery-backed), in the 32X cartridge slot – required
+- **A 4MB RAM cart** (battery-backed), in the 32X cartridge slot – required
 - a **6-button pad** (recommended; with a 3-button pad Start still opens the inventory, but walk,
   roll and look are missing)
 
-Emulators: Kega Fusion cannot emulate the RAM cart, so the game does not run there.
+Emulators: Kega Fusion cannot emulate the 4MB RAM cart, so the game does not run there.
 
 ## What you need
 | What | Where it goes |
@@ -82,10 +82,11 @@ Saving is not available in Lara's Home.
 
 ## Credits
 - **OpenLara** – XProger and contributors: https://github.com/XProger/OpenLara
+- **Doom 32X: Resurrection** Victor Luchits (viciious) 
 - **Sega CD / 32X boot and command framework** – from the Kobo Deluxe CD32X project, built on
-  Chilly Willy's Sega CD and 32X examples and toolchain
-- **Doom 32X: Resurrection** (viciious) – the CD32X loader started as its CD-boot loader
-- **4 MB RAM cart** – MicroNut99
+  Chilly Willy's Sega CD and 32X examples and toolchain – the CD32X loader started as its CD-boot loader
+- **4MB 32X RAM cart** Victor Luchits, Joseph Fenton, Leo Oliveira, Tiido priimägi and Eric Witt. 
+- OpenLara port – MicroNut99
 - **Tomb Raider** – Core Design / Eidos (now Crystal Dynamics / Embracer). Tomb Raider is their
   trademark; this project contains none of their data and is not affiliated with them.
 
