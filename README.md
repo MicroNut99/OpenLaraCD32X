@@ -1,6 +1,6 @@
 # Tomb Raider for Sega CD + 32X (OpenLara CD32X)
 
-Tomb Raider (1996) on the **Sega CD + 32X**, built on XProger's **OpenLara** 32X engine.
+Tomb Raider (1996) on the **Sega CD32X**, built on XProger's **OpenLara** 32X engine.
 The whole game runs from one CD: each level is loaded from the disc into a 4 MB RAM cart, with
 CD music, PCM sound effects and saving.
 
@@ -10,7 +10,7 @@ CD music, PCM sound effects and saving.
 ## Hardware
 - Sega Genesis / Mega Drive
 - Sega CD / Mega-CD
-- 32X
+- Sega 32X
 - **A 4MB RAM cart** (battery-backed), in the 32X cartridge slot – required
 - a **6-button pad** (recommended; with a 3-button pad Start still opens the inventory, but walk,
   roll and look are missing)
