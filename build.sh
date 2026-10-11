@@ -10,8 +10,8 @@ grep -q '^#define CDL_TARGET_OPENLARA 1' "$HERE/sh2/cdloader_sh2.c" \
   || { echo "*** sh2/cdloader_sh2.c is not in OpenLara mode - stopping"; exit 1; }
 [ -f "$ENGINE/main.cpp" ] || { echo "*** engine not found at $ENGINE - stopping"; exit 1; }
 if ! grep -q 'CD32X' "$ENGINE/main.cpp"; then
-  echo "==> installing engine/main.cpp + Makefile into OpenLara-src (git keeps the old ones)"
-  cp "$HERE/engine/main.cpp" "$HERE/engine/Makefile" "$ENGINE/"
+  echo "==> applying engine/openlara-cd32x.patch to OpenLara-src"
+  git -C "$HERE/../OpenLara-src" apply "$HERE/engine/openlara-cd32x.patch"
 fi
 
 echo "==> splash";    python3 "$HERE/tools/make_ol_splash.py" "$HERE/splash.jpg" "$ENGINE/data/SPLASH.BIN"
