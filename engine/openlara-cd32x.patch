@@ -1,0 +1,2618 @@
+diff --git a/src/fixed/enemy.h b/src/fixed/enemy.h
+index 4325cac..a08d448 100644
+--- a/src/fixed/enemy.h
++++ b/src/fixed/enemy.h
+@@ -440,6 +440,27 @@ struct Enemy : ItemObj
+         return level.zones[gSaveGame.flipped][extraE->nav.zoneType];
+     }
+ 
++    // ENEMIES-2: rough "can it shoot at Lara": in front, in range, not far above/below
++    bool canSee(int32 maxDist)
++    {
++        return tinfo.target && (tinfo.target->health > 0) && tinfo.front &&
++               (tinfo.dist < maxDist) && (abs(tinfo.target->pos.y - pos.y) < 2048);
++    }
++
++    // ENEMIES-2: an instant shot - the closer, the likelier it hits (as the full engine)
++    void shoot(int32 damage, int32 maxDist)
++    {
++        if (!tinfo.target || tinfo.dist >= maxDist)
++            return;
++        int32 chance = ((maxDist - tinfo.dist) * 0x8000) / maxDist - 0x2000;
++        if (rand_logic() < chance) {
++            vec3i p = tinfo.target->pos;
++            p.y -= 512;
++            fxBlood(p, 0, 0);
++            tinfo.target->hit(damage, p, 0);
++        }
++    }
++
+     void bite(int32 damage, const vec3i &offset, int32 joint)
+     {
+         if (!tinfo.target)
+@@ -1194,6 +1215,33 @@ struct Bat : Enemy
+ 
+ struct Crocodile : Enemy
+ {
++    // ENEMIES-2: crocodile, on land and in water (ported from the full engine)
++    enum {
++        HIT_MASK         = 0x000003FC,
++        DIST_BITE        = 435,
++        DIST_TURN        = 3072,
++        DAMAGE           = 25,
++        ANIM_DEATH_LAND  = 11,
++        ANIM_DEATH_WATER = 4
++    };
++
++    enum {  // land
++        STATE_NONE,
++        STATE_STOP,
++        STATE_RUN,
++        STATE_WALK,
++        STATE_TURN,
++        STATE_BITE,
++        STATE_UNUSED,
++        STATE_DEATH
++    };
++
++    enum {  // water
++        STATE_WATER_SWIM = 1,
++        STATE_WATER_BITE,
++        STATE_WATER_DEATH
++    };
++
+     Crocodile(Room* room) : Enemy(room, 20, 341, 600, AGGRESSION_LVL_2) {}
+ 
+     virtual void initExtra()
+@@ -1204,69 +1252,134 @@ struct Crocodile : Enemy
+         } else {
+             extraE->nav.stepHeight = 20 * 1024;
+             extraE->nav.dropHeight = -20 * 1024;
++            extraE->nav.vSpeed = 32;
+         }
+     }
+-};
+-
+ 
+-struct Lion : Enemy
+-{
+-    Lion(Room* room) : Enemy(room, 1, 341, 400, AGGRESSION_LVL_2)
++    virtual void hit(int32 damage, const vec3i &point, int32 soundId)
+     {
+-        switch (type)
+-        {
+-            case ITEM_LION_MALE   : health = 30; aggression = AGGRESSION_LVL_MAX; break;
+-            case ITEM_LION_FEMALE : health = 25; break;
+-            case ITEM_PUMA        : health = 40; break;
++        Enemy::hit(damage, point, soundId);
++        if (health <= 0) {
++            int32 anim = (type == ITEM_CROCODILE_LAND) ? ANIM_DEATH_LAND : ANIM_DEATH_WATER;
++            animSet(level.models[type].animIndex + anim, true);
+         }
+     }
+ 
+-    virtual void hit(int32 damage, const vec3i &point, int32 soundId)
++    virtual int32 updateState()
+     {
+-        Enemy::hit(damage, point, (type == ITEM_PUMA) ? 0 : SND_HIT_LION);
+-    }
++        if (health <= 0)
++            return goalState;
+ 
+-    virtual void initExtra()
+-    {
+-        extraE->nav.stepHeight = 256;
+-        extraE->nav.dropHeight = -1024;
+-    }
+-};
++        if (nextState == state)
++            nextState = STATE_NONE;
+ 
++        if (type != ITEM_CROCODILE_LAND)        // in the water
++        {
++            switch (state)
++            {
++                case STATE_WATER_SWIM:
++                {
++                    extraE->maxTurn = ANGLE(6);
++                    if (tinfo.front && hitMask)
++                        return STATE_WATER_BITE;
++                    break;
++                }
++                case STATE_WATER_BITE:
++                {
++                    if (hitMask) {
++                        if (nextState)
++                            return goalState;
++                        bite(DAMAGE, _vec3i(5, -21, 467), 9);
++                        nextState = STATE_WATER_SWIM;
++                    }
++                    return STATE_WATER_SWIM;
++                }
++            }
++            return goalState;
++        }
+ 
+-struct Gorilla : Enemy
+-{
+-    Gorilla(Room* room) : Enemy(room, 22, 341, 250, AGGRESSION_LVL_MAX) {}
++        switch (state)
++        {
++            case STATE_STOP:
++            {
++                if (tinfo.canAttack && tinfo.dist < DIST_BITE)
++                    return STATE_BITE;
++                switch (mood) {
++                    case MOOD_ESCAPE : return STATE_RUN;
++                    case MOOD_ATTACK : return (tinfo.front || tinfo.dist < DIST_TURN) ? STATE_RUN : STATE_TURN;
++                    case MOOD_STALK  : return STATE_WALK;
++                    default          : break;
++                }
++                break;
++            }
+ 
+-    virtual void initExtra()
+-    {
+-        extraE->nav.stepHeight = 512;
+-        extraE->nav.dropHeight = -1024;
+-    }
+-};
++            case STATE_RUN:
++            {
++                extraE->maxTurn = ANGLE(6);
++                if (tinfo.front && (hitMask & HIT_MASK))
++                    return STATE_STOP;
++                if (mood == MOOD_SLEEP)
++                    return STATE_STOP;
++                if (mood == MOOD_STALK)
++                    return STATE_WALK;
++                if (mood == MOOD_ATTACK && tinfo.dist > DIST_TURN && !tinfo.front)
++                    return STATE_STOP;
++                break;
++            }
+ 
++            case STATE_WALK:
++            {
++                extraE->maxTurn = ANGLE(6);
++                if (tinfo.front && (hitMask & HIT_MASK))
++                    return STATE_STOP;
++                if (mood == MOOD_SLEEP)
++                    return STATE_STOP;
++                if (mood == MOOD_ATTACK || mood == MOOD_ESCAPE)
++                    return STATE_RUN;
++                break;
++            }
+ 
+-struct Rat : Enemy
+-{
+-    Rat(Room* room) : Enemy(room, 5, 204, 200, AGGRESSION_LVL_2) {}
++            case STATE_TURN:
++            {
++                tinfo.turn = ANGLE(6);
++                return tinfo.front ? STATE_WALK : goalState;
++            }
+ 
+-    virtual void hit(int32 damage, const vec3i &point, int32 soundId)
+-    {
+-        Enemy::hit(damage, point, SND_HIT_RAT);
++            case STATE_BITE:
++            {
++                if (!nextState) {
++                    bite(DAMAGE, _vec3i(5, -21, 467), 9);
++                    nextState = STATE_STOP;
++                }
++                break;
++            }
++        }
++
++        return goalState;
+     }
+ };
+ 
+ 
+-struct Rex : Enemy
++struct Lion : Enemy
+ {
++    Lion(Room* room) : Enemy(room, 1, 341, 400, AGGRESSION_LVL_2)
++    {
++        switch (type)
++        {
++            case ITEM_LION_MALE   : health = 30; aggression = AGGRESSION_LVL_MAX; break;
++            case ITEM_LION_FEMALE : health = 25; break;
++            case ITEM_PUMA        : health = 40; break;
++        }
++    }
++
++    // ENEMIES-1: lion / lioness / puma behaviour (ported from the full engine)
+     enum {
+-        HIT_MASK = 0x00003000,  // head
+-        DIST_BITE = 1500,
+-        DIST_WALK = 4096,
+-        DIST_RUN = 5120,
+-        DAMAGE_RUN = 10,
+-        DAMAGE_WALK = 1,
+-        DAMAGE_FATAL = 1000
++        HIT_MASK        = 0x380066,
++        DIST_ATTACK     = 1024,
++        DAMAGE_ATTACK   = 150,
++        DAMAGE_BITE     = 250,
++        ANIM_DEATH_LION = 7,
++        ANIM_DEATH_PUMA = 4
+     };
+ 
+     enum {
+@@ -1274,30 +1387,29 @@ struct Rex : Enemy
+         STATE_STOP,
+         STATE_WALK,
+         STATE_RUN,
+-        STATE_UNUSED,
++        STATE_ATTACK,
+         STATE_DEATH,
+         STATE_ROAR,
+-        STATE_BITE,
+-        STATE_FATAL
++        STATE_BITE
+     };
+ 
+-    Rex(Room* room) : Enemy(room, 100, 341, 2000, AGGRESSION_LVL_MAX) {}
+-
+-    virtual int32 updateState()
++    virtual void hit(int32 damage, const vec3i &point, int32 soundId)
+     {
++        Enemy::hit(damage, point, (type == ITEM_PUMA) ? 0 : SND_HIT_LION);
++
+         if (health <= 0) {
+-            return (state == STATE_STOP) ? STATE_DEATH : STATE_STOP;
++            int32 anim = (type == ITEM_PUMA) ? ANIM_DEATH_PUMA : ANIM_DEATH_LION;
++            animSet(level.models[type].animIndex + anim + RAND_LOGIC(2), true);
+         }
++    }
+ 
+-        extraE->rotNeck = (extraE->rotHead >>= 1);
+-
+-        if (hitMask)
+-        {
+-            tinfo.target->hit((state == STATE_RUN) ? DAMAGE_RUN : DAMAGE_WALK, _vec3i(0, 0, 0), 0);
+-        }
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++            return goalState;
+ 
+-        bool walk = (tinfo.canAttack && (tinfo.dist > DIST_BITE) && (tinfo.dist < DIST_WALK)) ||
+-                    (tinfo.behind && !tinfo.front && (mood != MOOD_ESCAPE));
++        if (nextState == state)
++            nextState = STATE_NONE;
+ 
+         switch (state)
+         {
+@@ -1305,20 +1417,21 @@ struct Rex : Enemy
+             {
+                 if (nextState)
+                     return nextState;
+-                if (tinfo.canAttack && (tinfo.dist < DIST_BITE))
+-                    return STATE_BITE;
+-                if ((mood == MOOD_SLEEP) || walk)
++                if (mood == MOOD_SLEEP)
+                     return STATE_WALK;
++                if (tinfo.front && (hitMask & HIT_MASK))
++                    return STATE_BITE;
++                if (tinfo.front && tinfo.dist < DIST_ATTACK)
++                    return STATE_ATTACK;
+                 return STATE_RUN;
+             }
+ 
+             case STATE_WALK:
+             {
+                 extraE->maxTurn = ENEMY_TURN_2;
+-                if ((mood != MOOD_SLEEP) && !walk)
++                if (mood != MOOD_SLEEP)
+                     return STATE_STOP;
+-                if (tinfo.front && (rand_logic() < 0x200))
+-                {
++                if (rand_logic() < 0x0D) {
+                     nextState = STATE_ROAR;
+                     return STATE_STOP;
+                 }
+@@ -1327,41 +1440,31 @@ struct Rex : Enemy
+ 
+             case STATE_RUN:
+             {
+-                extraE->maxTurn = ENEMY_TURN_4;
+-                if (((tinfo.dist < DIST_RUN) && tinfo.canAttack) || walk)
++                extraE->maxTurn = ENEMY_TURN_5;
++                tinfo.tilt = tinfo.turn;
++                if ((mood == MOOD_SLEEP) ||
++                    (tinfo.front && tinfo.dist < DIST_ATTACK) ||
++                    (tinfo.front && (hitMask & HIT_MASK)))
+                     return STATE_STOP;
+-                if ((mood != MOOD_ESCAPE) && tinfo.front && (rand_logic() < 0x200))
+-                {
++                if (mood == MOOD_ESCAPE && rand_logic() < 0x0D) {
+                     nextState = STATE_ROAR;
+                     return STATE_STOP;
+                 }
+-                if (mood == MOOD_SLEEP)
+-                    return STATE_STOP;
+                 break;
+             }
+ 
+-            case STATE_BITE:
++            case STATE_ROAR:
+             {
+-                nextState = STATE_WALK;
+-                if (hitMask & HIT_MASK)
+-                {
+-                    angle.x = 0;
+-                    angle.z = 0;
+-
+-                    tinfo.target->pos = pos;
+-                    tinfo.target->angle = angle;
+-                    tinfo.target->flags &= ~ITEM_FLAG_GRAVITY;
+-                    tinfo.target->hit(DAMAGE_FATAL, _vec3i(0, 0, 0), 0);
+-                    tinfo.target->meshSwap(ITEM_LARA_SPEC, 0xFFFFFFFF);
+-                    tinfo.target->animSet(level.models[ITEM_LARA_SPEC].animIndex + 1, true);
+-
+-                    if (tinfo.target->room != room)
+-                    {
+-                        tinfo.target->room->remove(tinfo.target);
+-                        room->add(tinfo.target);
+-                    }
++                extraE->maxTurn = ENEMY_TURN_2;
++                break;
++            }
+ 
+-                    return STATE_FATAL;
++            case STATE_ATTACK:
++            case STATE_BITE:
++            {
++                if (!nextState && (hitMask & HIT_MASK)) {
++                    bite((state == STATE_ATTACK) ? DAMAGE_ATTACK : DAMAGE_BITE, _vec3i(-2, -10, 132), 21);
++                    nextState = STATE_STOP;
+                 }
+                 break;
+             }
+@@ -1369,44 +1472,50 @@ struct Rex : Enemy
+ 
+         return goalState;
+     }
++
++    virtual void initExtra()
++    {
++        extraE->nav.stepHeight = 256;
++        extraE->nav.dropHeight = -1024;
++    }
+ };
+ 
+ 
+-struct Raptor : Enemy
++struct Gorilla : Enemy
+ {
++    // ENEMIES-1: gorilla behaviour (ported from the full engine; no wall climbing / side steps)
+     enum {
+-        HIT_MASK = 0xFF7C00,  // hands and head
+-
+-        DIST_BITE = 680,
+-        DIST_ATTACK = 1536,
+-
+-        DAMAGE_ATTACK = 100,
+-
+-        ANIM_DEATH_1 = 9,
+-        ANIM_DEATH_2 = 10
++        HIT_MASK        = 0x00FF00,
++        DIST_ATTACK     = 430,
++        DIST_AGGRESSION = 2048,
++        DAMAGE_ATTACK   = 200,
++        START_HEALTH    = 22,
++        ANIM_DEATH      = 7
+     };
+ 
+     enum {
+-        STATE_NONE = 0,
+-        STATE_DEATH = 0,
++        STATE_NONE,
+         STATE_STOP,
+-        STATE_WALK,
+-        STATE_RUN,
+-        STATE_ATTACK_1,
+         STATE_UNUSED,
+-        STATE_ROAR,
+-        STATE_ATTACK_2,
+-        STATE_BITE
++        STATE_RUN,
++        STATE_ATTACK,
++        STATE_DEATH,
++        STATE_IDLE1,
++        STATE_IDLE2,
++        STATE_LEFT,
++        STATE_RIGHT,
++        STATE_JUMP,
++        STATE_CLIMB
+     };
+ 
+-    Raptor(Room* room) : Enemy(room, 20, 341, 400, AGGRESSION_LVL_3) {}
++    Gorilla(Room* room) : Enemy(room, START_HEALTH, 341, 250, AGGRESSION_LVL_MAX) {}
+ 
+-    virtual void hit(int32 damage, const vec3i& point, int32 soundId)
++    virtual void hit(int32 damage, const vec3i &point, int32 soundId)
+     {
+-        Enemy::hit(damage, point, 0);
++        Enemy::hit(damage, point, soundId);
+ 
+         if (health <= 0) {
+-            animSet(level.models[type].animIndex + ANIM_DEATH_1 + RAND_LOGIC(2), true);
++            animSet(level.models[type].animIndex + ANIM_DEATH + RAND_LOGIC(2), true);
+         }
+     }
+ 
+@@ -1415,68 +1524,896 @@ struct Raptor : Enemy
+         if (health <= 0)
+             return goalState;
+ 
++        if (nextState == state)
++            nextState = STATE_NONE;
++
++        // angry once Lara is close or it has been shot (the full engine keeps a flag for this)
++        bool angry = (tinfo.dist < DIST_AGGRESSION) || (health < START_HEALTH);
++
+         switch (state)
+         {
+-            case STATE_STOP: {
++            case STATE_STOP:
++            {
+                 if (nextState)
+                     return nextState;
+-                if ((hitMask & HIT_MASK) || (tinfo.canAttack && tinfo.dist < DIST_BITE))
+-                    return STATE_BITE;
+                 if (tinfo.canAttack && tinfo.dist < DIST_ATTACK)
+-                    return STATE_ATTACK_1;
+-                if (mood == MOOD_SLEEP)
+-                    return STATE_WALK;
++                    return STATE_ATTACK;
++                if (!angry && tinfo.front) {
++                    int32 r = rand_logic() & 511;
++                    if (r < 120) return STATE_JUMP;
++                    if (r < 240) return STATE_IDLE1;
++                    if (r < 360) return STATE_IDLE2;
++                }
+                 return STATE_RUN;
+             }
+ 
+-            case STATE_WALK: {
+-                extraE->maxTurn = ENEMY_TURN_1;
+-                tinfo.tilt = tinfo.turn >> 1;
+-
+-                if (mood != MOOD_SLEEP)
+-                    return STATE_STOP;
+-
+-                if (rand_logic() < 0x100) {
++            case STATE_RUN:
++            {
++                extraE->maxTurn = ENEMY_TURN_5;
++                tinfo.tilt = tinfo.turn;
++                if (!angry && tinfo.front)
++                    return STATE_STOP;
++                if (tinfo.front && (hitMask & HIT_MASK)) {
++                    nextState = STATE_ATTACK;
++                    return STATE_STOP;
++                }
++                if (mood != MOOD_ESCAPE) {
++                    int32 r = rand_logic();
++                    if (r < 160)
++                        nextState = STATE_JUMP;
++                    else if (r < 320)
++                        nextState = STATE_IDLE1;
++                    else if (r < 480)
++                        nextState = STATE_IDLE2;
++                    else
++                        break;
++                    return STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_ATTACK:
++            {
++                if (!nextState && (hitMask & HIT_MASK)) {
++                    bite(DAMAGE_ATTACK, _vec3i(0, -19, 75), 15);
++                    nextState = STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_LEFT:
++            case STATE_RIGHT:
++                return STATE_STOP;
++        }
++
++        return goalState;
++    }
++
++    virtual void initExtra()
++    {
++        extraE->nav.stepHeight = 512;
++        extraE->nav.dropHeight = -1024;
++    }
++};
++
++
++struct Rat : Enemy
++{
++    // ENEMIES-1: rat behaviour (ported from the full engine)
++    enum {
++        HIT_MASK         = 0x0300018F,
++        DIST_BITE        = 341,
++        DIST_ATTACK      = 1536,
++        WAIT_CHANCE      = 0x148,          // 1 % per frame, as RAT_WAIT
++        DAMAGE           = 20,
++        ANIM_DEATH_LAND  = 8,
++        ANIM_DEATH_WATER = 2
++    };
++
++    enum {  // land
++        STATE_NONE,
++        STATE_STOP,
++        STATE_ATTACK,
++        STATE_RUN,
++        STATE_BITE,
++        STATE_DEATH,
++        STATE_WAIT
++    };
++
++    enum {  // water
++        STATE_WATER_SWIM = 1,
++        STATE_WATER_BITE,
++        STATE_WATER_DEATH
++    };
++
++    Rat(Room* room) : Enemy(room, 5, 204, 200, AGGRESSION_LVL_2) {}
++
++    virtual void hit(int32 damage, const vec3i &point, int32 soundId)
++    {
++        Enemy::hit(damage, point, SND_HIT_RAT);
++
++        if (health <= 0) {
++            int32 anim = (type == ITEM_RAT_WATER) ? ANIM_DEATH_WATER : ANIM_DEATH_LAND;
++            animSet(level.models[type].animIndex + anim, true);
++        }
++    }
++
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++            return goalState;
++
++        if (nextState == state)
++            nextState = STATE_NONE;
++
++        if (type == ITEM_RAT_WATER)
++        {
++            switch (state)
++            {
++                case STATE_WATER_SWIM:
++                {
++                    extraE->maxTurn = ANGLE(6);
++                    if (tinfo.front && (hitMask & HIT_MASK))
++                        return STATE_WATER_BITE;
++                    break;
++                }
++                case STATE_WATER_BITE:
++                {
++                    if (!nextState && tinfo.front && (hitMask & HIT_MASK)) {
++                        bite(DAMAGE, _vec3i(0, -11, 108), 3);
++                        nextState = STATE_WATER_SWIM;
++                    }
++                    return STATE_WATER_SWIM;
++                }
++            }
++            return goalState;
++        }
++
++        switch (state)
++        {
++            case STATE_STOP:
++            {
++                if (nextState)
++                    return nextState;
++                if (tinfo.canAttack && tinfo.dist < DIST_BITE)
++                    return STATE_BITE;
++                return STATE_RUN;
++            }
++
++            case STATE_RUN:
++            {
++                extraE->maxTurn = ANGLE(6);
++                tinfo.tilt = tinfo.turn;
++                if (tinfo.front && (hitMask & HIT_MASK))
++                    return STATE_STOP;
++                if (tinfo.canAttack && tinfo.dist < DIST_ATTACK)
++                    return STATE_ATTACK;
++                if (tinfo.front && rand_logic() < WAIT_CHANCE) {
++                    nextState = STATE_WAIT;
++                    return STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_ATTACK:
++            case STATE_BITE:
++            {
++                if (!nextState && tinfo.front && (hitMask & HIT_MASK)) {
++                    bite(DAMAGE, _vec3i(0, -11, 108), 3);
++                    nextState = (state == STATE_ATTACK) ? STATE_RUN : STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_WAIT:
++            {
++                if (mood == MOOD_SLEEP || rand_logic() < WAIT_CHANCE)
++                    return STATE_STOP;
++                break;
++            }
++        }
++
++        return goalState;
++    }
++};
++
++
++struct Rex : Enemy
++{
++    enum {
++        HIT_MASK = 0x00003000,  // head
++        DIST_BITE = 1500,
++        DIST_WALK = 4096,
++        DIST_RUN = 5120,
++        DAMAGE_RUN = 10,
++        DAMAGE_WALK = 1,
++        DAMAGE_FATAL = 1000
++    };
++
++    enum {
++        STATE_NONE,
++        STATE_STOP,
++        STATE_WALK,
++        STATE_RUN,
++        STATE_UNUSED,
++        STATE_DEATH,
++        STATE_ROAR,
++        STATE_BITE,
++        STATE_FATAL
++    };
++
++    Rex(Room* room) : Enemy(room, 100, 341, 2000, AGGRESSION_LVL_MAX) {}
++
++    virtual int32 updateState()
++    {
++        if (health <= 0) {
++            return (state == STATE_STOP) ? STATE_DEATH : STATE_STOP;
++        }
++
++        extraE->rotNeck = (extraE->rotHead >>= 1);
++
++        if (hitMask)
++        {
++            tinfo.target->hit((state == STATE_RUN) ? DAMAGE_RUN : DAMAGE_WALK, _vec3i(0, 0, 0), 0);
++        }
++
++        bool walk = (tinfo.canAttack && (tinfo.dist > DIST_BITE) && (tinfo.dist < DIST_WALK)) ||
++                    (tinfo.behind && !tinfo.front && (mood != MOOD_ESCAPE));
++
++        switch (state)
++        {
++            case STATE_STOP:
++            {
++                if (nextState)
++                    return nextState;
++                if (tinfo.canAttack && (tinfo.dist < DIST_BITE))
++                    return STATE_BITE;
++                if ((mood == MOOD_SLEEP) || walk)
++                    return STATE_WALK;
++                return STATE_RUN;
++            }
++
++            case STATE_WALK:
++            {
++                extraE->maxTurn = ENEMY_TURN_2;
++                if ((mood != MOOD_SLEEP) && !walk)
++                    return STATE_STOP;
++                if (tinfo.front && (rand_logic() < 0x200))
++                {
++                    nextState = STATE_ROAR;
++                    return STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_RUN:
++            {
++                extraE->maxTurn = ENEMY_TURN_4;
++                if (((tinfo.dist < DIST_RUN) && tinfo.canAttack) || walk)
++                    return STATE_STOP;
++                if ((mood != MOOD_ESCAPE) && tinfo.front && (rand_logic() < 0x200))
++                {
+                     nextState = STATE_ROAR;
+                     return STATE_STOP;
+                 }
++                if (mood == MOOD_SLEEP)
++                    return STATE_STOP;
++                break;
++            }
++
++            case STATE_BITE:
++            {
++                nextState = STATE_WALK;
++                if (hitMask & HIT_MASK)
++                {
++                    angle.x = 0;
++                    angle.z = 0;
++
++                    tinfo.target->pos = pos;
++                    tinfo.target->angle = angle;
++                    tinfo.target->flags &= ~ITEM_FLAG_GRAVITY;
++                    tinfo.target->hit(DAMAGE_FATAL, _vec3i(0, 0, 0), 0);
++                    tinfo.target->meshSwap(ITEM_LARA_SPEC, 0xFFFFFFFF);
++                    tinfo.target->animSet(level.models[ITEM_LARA_SPEC].animIndex + 1, true);
++
++                    if (tinfo.target->room != room)
++                    {
++                        tinfo.target->room->remove(tinfo.target);
++                        room->add(tinfo.target);
++                    }
++
++                    return STATE_FATAL;
++                }
++                break;
++            }
++        }
++
++        return goalState;
++    }
++};
++
++
++struct Raptor : Enemy
++{
++    enum {
++        HIT_MASK = 0xFF7C00,  // hands and head
++
++        DIST_BITE = 680,
++        DIST_ATTACK = 1536,
++
++        DAMAGE_ATTACK = 100,
++
++        ANIM_DEATH_1 = 9,
++        ANIM_DEATH_2 = 10
++    };
++
++    enum {
++        STATE_NONE = 0,
++        STATE_DEATH = 0,
++        STATE_STOP,
++        STATE_WALK,
++        STATE_RUN,
++        STATE_ATTACK_1,
++        STATE_UNUSED,
++        STATE_ROAR,
++        STATE_ATTACK_2,
++        STATE_BITE
++    };
++
++    Raptor(Room* room) : Enemy(room, 20, 341, 400, AGGRESSION_LVL_3) {}
++
++    virtual void hit(int32 damage, const vec3i& point, int32 soundId)
++    {
++        Enemy::hit(damage, point, 0);
++
++        if (health <= 0) {
++            animSet(level.models[type].animIndex + ANIM_DEATH_1 + RAND_LOGIC(2), true);
++        }
++    }
++
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++            return goalState;
++
++        switch (state)
++        {
++            case STATE_STOP: {
++                if (nextState)
++                    return nextState;
++                if ((hitMask & HIT_MASK) || (tinfo.canAttack && tinfo.dist < DIST_BITE))
++                    return STATE_BITE;
++                if (tinfo.canAttack && tinfo.dist < DIST_ATTACK)
++                    return STATE_ATTACK_1;
++                if (mood == MOOD_SLEEP)
++                    return STATE_WALK;
++                return STATE_RUN;
++            }
++
++            case STATE_WALK: {
++                extraE->maxTurn = ENEMY_TURN_1;
++                tinfo.tilt = tinfo.turn >> 1;
++
++                if (mood != MOOD_SLEEP)
++                    return STATE_STOP;
++
++                if (rand_logic() < 0x100) {
++                    nextState = STATE_ROAR;
++                    return STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_RUN: {
++                extraE->maxTurn = ENEMY_TURN_4;
++                tinfo.tilt = tinfo.turn;
++
++                if (hitMask & HIT_MASK)
++                    return STATE_STOP;
++
++                if (tinfo.canAttack && tinfo.dist < DIST_ATTACK)
++                {
++                    if (goalState != STATE_RUN)
++                        break;
++                    return (rand_logic() < 0x2000) ? STATE_STOP : STATE_ATTACK_2;
++                }
++
++                if (tinfo.front && (mood != MOOD_ESCAPE) && (rand_logic() < 0x100))
++                {
++                    nextState = STATE_ROAR;
++                    return STATE_STOP;
++                }
++
++                if (mood == MOOD_SLEEP)
++                    return STATE_STOP;
++                break;
++            }
++
++            case STATE_ATTACK_1:
++            case STATE_ATTACK_2:
++            case STATE_BITE:
++            {
++                tinfo.tilt = tinfo.turn;
++                if (!nextState && tinfo.front && (hitMask & HIT_MASK)) {
++                    bite(DAMAGE_ATTACK, _vec3i(0, 66, 318), 22);
++                    nextState = (state == STATE_ATTACK_2) ? STATE_RUN : STATE_STOP;
++                }
++                break;
++            }
++        }
++
++        return goalState;
++    }
++};
++
++
++struct Mutant : Enemy
++{
++    // ENEMIES-2: winged / shooting / ground mutants (Egypt, Atlantis).  Ported from the full
++    // engine; the projectiles are instant shots here, the winged one flies like the bat.
++    enum {
++        HIT_MASK        = 0x0678,
++        DIST_ATTACK_1   = 600,
++        DIST_ATTACK_2   = 2560,
++        DIST_ATTACK_3   = 300,
++        DIST_SHOT       = 3840,
++        DIST_STALK      = 4608,
++        DAMAGE_SHOT     = 50
++    };
++
++    enum {
++        STATE_NONE,
++        STATE_STOP,
++        STATE_WALK,
++        STATE_RUN,
++        STATE_ATTACK_1,
++        STATE_DEATH,
++        STATE_LOOKING,
++        STATE_ATTACK_2,
++        STATE_ATTACK_3,
++        STATE_AIM_1,
++        STATE_AIM_2,
++        STATE_FIRE,
++        STATE_IDLE,
++        STATE_FLY
++    };
++
++    Mutant(Room* room) : Enemy(room, 50, 341, 150, AGGRESSION_LVL_MAX) {}
++
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++            return (state == STATE_FLY) ? STATE_STOP : STATE_DEATH;
++
++        if (nextState == state)
++            nextState = STATE_NONE;
++
++        bool flyer = false;
++        bool shooter = !(false);
++
++        bool shootFar = shooter && tinfo.front && (abs(tinfo.angle) < ANGLE(45)) &&
++                        (tinfo.dist > DIST_SHOT || !checkZone()) && canSee(8192);
++        bool wantFly = flyer && !shootFar && (mood == MOOD_ESCAPE || !checkZone());
++
++        if (state == STATE_FLY)
++        {
++            extraE->nav.stepHeight = 30 * 1024;
++            extraE->nav.dropHeight = -30 * 1024;
++            extraE->nav.vSpeed = 16;
++            extraE->maxTurn = ANGLE(6);
++            if (!wantFly && pos.y >= roomFloor - 128)
++                return STATE_STOP;
++            return STATE_FLY;
++        }
++
++        extraE->nav.stepHeight = 256;
++        extraE->nav.dropHeight = -256;
++
++        switch (state)
++        {
++            case STATE_STOP:
++            {
++                if (wantFly)
++                    return STATE_FLY;
++                if ((tinfo.canAttack && tinfo.dist < DIST_ATTACK_3) || (hitMask & HIT_MASK))
++                    return STATE_ATTACK_3;
++                if (tinfo.canAttack && tinfo.dist < DIST_ATTACK_1)
++                    return STATE_ATTACK_1;
++                if (shootFar)
++                    return (rand_logic() & 1) ? STATE_AIM_1 : STATE_AIM_2;
++                if (mood == MOOD_SLEEP || (mood == MOOD_STALK && tinfo.dist < DIST_STALK))
++                    return STATE_LOOKING;
++                return STATE_RUN;
++            }
++
++            case STATE_WALK:
++            {
++                extraE->maxTurn = ENEMY_TURN_2;
++                if (shootFar || wantFly || mood == MOOD_ATTACK || mood == MOOD_ESCAPE)
++                    return STATE_STOP;
++                if (mood == MOOD_SLEEP || (mood == MOOD_STALK && !checkZone())) {
++                    if (rand_logic() < 50)
++                        return STATE_LOOKING;
++                } else if (mood == MOOD_STALK && tinfo.dist > DIST_STALK) {
++                    return STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_RUN:
++            {
++                extraE->maxTurn = ANGLE(6);
++                tinfo.tilt = tinfo.turn;
++                if (wantFly || (hitMask & HIT_MASK))
++                    return STATE_STOP;
++                if (tinfo.canAttack && tinfo.dist < DIST_ATTACK_1)
++                    return STATE_STOP;
++                if (tinfo.front && tinfo.dist < DIST_ATTACK_2)
++                    return STATE_ATTACK_2;
++                if (shootFar)
++                    return STATE_STOP;
++                if (mood == MOOD_SLEEP || (mood == MOOD_STALK && tinfo.dist < DIST_STALK))
++                    return STATE_STOP;
++                break;
++            }
++
++            case STATE_LOOKING:
++            {
++                if (shootFar || wantFly)
++                    return STATE_STOP;
++                if (mood == MOOD_SLEEP) {
++                    if (rand_logic() < 256)
++                        return STATE_WALK;
++                } else if (mood == MOOD_STALK) {
++                    if (tinfo.dist >= DIST_STALK)
++                        return STATE_STOP;
++                    if (checkZone() && rand_logic() < 256)
++                        return STATE_WALK;
++                } else {
++                    return STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_ATTACK_1:
++            case STATE_ATTACK_2:
++            case STATE_ATTACK_3:
++            {
++                if (!nextState && (hitMask & HIT_MASK)) {
++                    int32 damage = (state == STATE_ATTACK_1) ? 150 : ((state == STATE_ATTACK_2) ? 100 : 200);
++                    bite(damage, _vec3i(-27, 98, 0), 10);
++                    nextState = STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_AIM_1:
++            case STATE_AIM_2:
++                return shootFar ? STATE_FIRE : STATE_STOP;
++
++            case STATE_FIRE:
++            {
++                if (!nextState) {
++                    shoot(DAMAGE_SHOT, 8192);
++                    nextState = STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_IDLE:
++                return STATE_STOP;
++        }
++
++        return goalState;
++    }
++};
++
++
++struct Centaur : Enemy
++{
++    // ENEMIES-2: centaur (Atlantis) - ported from the full engine; its fire bolt is an instant shot
++    enum {
++        HIT_MASK    = 0x030199,
++        DIST_RUN    = 1536,
++        DAMAGE_SHOT = 100,
++        DAMAGE_KICK = 200,
++        ANIM_DEATH  = 8
++    };
++
++    enum {
++        STATE_NONE,
++        STATE_STOP,
++        STATE_FIRE,
++        STATE_RUN,
++        STATE_AIM,
++        STATE_DEATH,
++        STATE_IDLE
++    };
++
++    Centaur(Room* room) : Enemy(room, 120, 341, 400, AGGRESSION_LVL_MAX) {}
++
++    virtual void hit(int32 damage, const vec3i &point, int32 soundId)
++    {
++        Enemy::hit(damage, point, soundId);
++        if (health <= 0)
++            animSet(level.models[type].animIndex + ANIM_DEATH, true);
++    }
++
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++            return goalState;
++
++        if (nextState == state)
++            nextState = STATE_NONE;
++
++        switch (state)
++        {
++            case STATE_STOP:
++            {
++                if (nextState)
++                    return nextState;
++                if (tinfo.canAttack && tinfo.dist < DIST_RUN)
++                    return STATE_RUN;
++                if (canSee(8192))
++                    return STATE_AIM;
++                return STATE_RUN;
++            }
++
++            case STATE_RUN:
++            {
++                extraE->maxTurn = ANGLE(4);
++                tinfo.tilt = tinfo.turn;
++                if (tinfo.canAttack && tinfo.dist < DIST_RUN) {
++                    nextState = STATE_IDLE;
++                    return STATE_STOP;
++                }
++                if (canSee(8192)) {
++                    nextState = STATE_AIM;
++                    return STATE_STOP;
++                }
++                if (rand_logic() < 96) {
++                    nextState = STATE_IDLE;
++                    return STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_AIM:
++            {
++                if (nextState)
++                    return nextState;
++                return canSee(8192) ? STATE_FIRE : STATE_STOP;
++            }
++
++            case STATE_FIRE:
++            {
++                if (!nextState) {
++                    nextState = STATE_AIM;
++                    shoot(DAMAGE_SHOT, 8192);
++                }
++                break;
++            }
++
++            case STATE_IDLE:
++            {
++                if (!nextState && (hitMask & HIT_MASK)) {
++                    bite(DAMAGE_KICK, _vec3i(50, 30, 0), 5);
++                    nextState = STATE_STOP;
++                }
++                break;
++            }
++        }
++
++        return goalState;
++    }
++};
++
++
++struct Mummy : Enemy
++{
++    // ENEMIES-2: the mummy only falls when it is shot
++    enum {
++        STATE_NONE,
++        STATE_IDLE,
++        STATE_FALL
++    };
++
++    Mummy(Room* room) : Enemy(room, 18, 10, 0, AGGRESSION_LVL_MAX) {}
++
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++            return STATE_FALL;
++        return goalState;
++    }
++};
++
++
++// ENEMIES-2: the human enemies (Larson, Pierre, the skater, the cowboy, Mr. T, Natla share this)
++struct Human : Enemy
++{
++    enum {
++        STATE_NONE,
++        STATE_STOP,
++        STATE_WALK,
++        STATE_RUN,
++        STATE_AIM,
++        STATE_DEATH,
++        STATE_WAIT,     // == STATE_FIRE for Mr. T and the cowboy
++        STATE_FIRE
++    };
++
++    enum {
++        DIST_WALK   = 3072,
++        DIST_SHOT   = 7168,
++        WAIT_CHANCE = 0x148
++    };
++
++    Human(Room* room, int32 _health, int32 _radius) : Enemy(room, _health, _radius, 0, AGGRESSION_LVL_MAX) {}
++
++    virtual int32 deathAnim() { return -1; }
++
++    virtual void hit(int32 damage, const vec3i &point, int32 soundId)
++    {
++        Enemy::hit(damage, point, soundId);
++        if (health <= 0) {
++            int32 a = deathAnim();
++            if (a >= 0)
++                animSet(level.models[type].animIndex + a, true);
++        }
++    }
++
++    void humanTurn()
++    {
++        if (state == STATE_RUN) {
++            extraE->maxTurn = ANGLE(6);
++            tinfo.tilt = tinfo.turn;
++        } else if (state == STATE_WALK) {
++            extraE->maxTurn = ANGLE(3);
++        }
++    }
++
++    // walk / run / aim / fire, as Larson and Pierre do it
++    int32 updateWalker(int32 damage, int32 shots)
++    {
++        humanTurn();
++
++        switch (state)
++        {
++            case STATE_STOP:
++            {
++                if (nextState)
++                    return nextState;
++                if (mood == MOOD_SLEEP)
++                    return (rand_logic() < WAIT_CHANCE) ? STATE_WAIT : STATE_WALK;
++                if (mood == MOOD_ESCAPE)
++                    return STATE_RUN;
++                return STATE_WALK;
++            }
++
++            case STATE_WAIT:
++            {
++                if (mood != MOOD_SLEEP)
++                    return STATE_STOP;
++                if (rand_logic() < WAIT_CHANCE) {
++                    nextState = STATE_WALK;
++                    return STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_WALK:
++            {
++                if (mood == MOOD_SLEEP && rand_logic() < WAIT_CHANCE)
++                    nextState = STATE_WAIT;
++                else if (mood == MOOD_ESCAPE)
++                    nextState = STATE_RUN;
++                else if (canSee(DIST_SHOT))
++                    nextState = STATE_AIM;
++                else if (!tinfo.front || tinfo.dist > DIST_WALK)
++                    nextState = STATE_RUN;
++                else
++                    break;
++                return STATE_STOP;
++            }
++
++            case STATE_RUN:
++            {
++                if (mood == MOOD_SLEEP && rand_logic() < WAIT_CHANCE)
++                    nextState = STATE_WAIT;
++                else if (canSee(DIST_SHOT))
++                    nextState = STATE_AIM;
++                else if (tinfo.front && tinfo.dist < DIST_WALK)
++                    nextState = STATE_WALK;
++                else
++                    break;
++                return STATE_STOP;
++            }
++
++            case STATE_AIM:
++            {
++                if (nextState)
++                    return nextState;
++                return canSee(DIST_SHOT) ? STATE_FIRE : STATE_STOP;
++            }
++
++            case STATE_FIRE:
++            {
++                if (!nextState) {
++                    for (int32 i = 0; i < shots; i++)
++                        shoot(damage, DIST_SHOT);
++                    nextState = STATE_AIM;
++                }
++                if (mood == MOOD_ESCAPE || !tinfo.target || tinfo.target->health <= 0)
++                    nextState = STATE_STOP;
+                 break;
+             }
++        }
+ 
+-            case STATE_RUN: {
+-                extraE->maxTurn = ENEMY_TURN_4;
+-                tinfo.tilt = tinfo.turn;
++        return goalState;
++    }
+ 
+-                if (hitMask & HIT_MASK)
+-                    return STATE_STOP;
++    // stop / walk / run / aim / fire-in-WAIT, as the cowboy and Mr. T do it
++    int32 updateGunner(int32 damage, int32 shots, int32 distWalk)
++    {
++        humanTurn();
+ 
+-                if (tinfo.canAttack && tinfo.dist < DIST_ATTACK)
+-                {
+-                    if (goalState != STATE_RUN)
+-                        break;
+-                    return (rand_logic() < 0x2000) ? STATE_STOP : STATE_ATTACK_2;
+-                }
++        switch (state)
++        {
++            case STATE_STOP:
++            {
++                if (nextState)
++                    return nextState;
++                if (canSee(DIST_SHOT))
++                    return STATE_AIM;
++                if (mood == MOOD_SLEEP)
++                    return STATE_WALK;
++                return STATE_RUN;
++            }
+ 
+-                if (tinfo.front && (mood != MOOD_ESCAPE) && (rand_logic() < 0x100))
+-                {
+-                    nextState = STATE_ROAR;
+-                    return STATE_STOP;
+-                }
++            case STATE_WALK:
++            {
++                if (mood == MOOD_ESCAPE || !tinfo.front)
++                    nextState = STATE_RUN;
++                else if (canSee(DIST_SHOT))
++                    nextState = STATE_AIM;
++                else if (tinfo.dist > distWalk)
++                    nextState = STATE_RUN;
++                else
++                    break;
++                return STATE_STOP;
++            }
+ 
+-                if (mood == MOOD_SLEEP)
++            case STATE_RUN:
++            {
++                if (mood == MOOD_ESCAPE || !tinfo.front)
++                    break;
++                if (canSee(DIST_SHOT))
++                    nextState = STATE_AIM;
++                else if (tinfo.dist < distWalk && tinfo.front)
++                    nextState = STATE_WALK;
++                else
++                    break;
++                return STATE_STOP;
++            }
++
++            case STATE_AIM:
++            {
++                if (nextState)
+                     return STATE_STOP;
+-                break;
++                return canSee(DIST_SHOT) ? STATE_WAIT : STATE_STOP;
+             }
+ 
+-            case STATE_ATTACK_1:
+-            case STATE_ATTACK_2:
+-            case STATE_BITE:
++            case STATE_WAIT:    // fire
+             {
+-                tinfo.tilt = tinfo.turn;
+-                if (!nextState && tinfo.front && (hitMask & HIT_MASK)) {
+-                    bite(DAMAGE_ATTACK, _vec3i(0, 66, 318), 22);
+-                    nextState = (state == STATE_ATTACK_2) ? STATE_RUN : STATE_STOP;
++                if (!nextState) {
++                    for (int32 i = 0; i < shots; i++)
++                        shoot(damage, DIST_SHOT);
++                    nextState = STATE_STOP;
+                 }
++                if (mood == MOOD_ESCAPE)
++                    nextState = STATE_RUN;
+                 break;
+             }
+         }
+@@ -1486,72 +2423,418 @@ struct Raptor : Enemy
+ };
+ 
+ 
+-struct Mutant : Enemy
++struct Larson : Human
+ {
+-    Mutant(Room* room) : Enemy(room, 50, 341, 150, AGGRESSION_LVL_MAX) {}
+-};
++    Larson(Room* room) : Human(room, 50, 102) {}
+ 
++    virtual int32 deathAnim() { return 15; }
+ 
+-struct Centaur : Enemy
+-{
+-    Centaur(Room* room) : Enemy(room, 120, 341, 400, AGGRESSION_LVL_MAX) {}
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++            return goalState;
++        if (nextState == state)
++            nextState = STATE_NONE;
++        return updateWalker(50, 1);
++    }
+ };
+ 
+ 
+-struct Mummy : Enemy
++struct Pierre : Human
+ {
+-    Mummy(Room* room) : Enemy(room, 18, 10, 0, AGGRESSION_LVL_MAX) {}
+-};
++    Pierre(Room* room) : Human(room, 70, 102) {}
+ 
++    virtual int32 deathAnim() { return 12; }
+ 
+-struct Larson : Enemy
+-{
+-    Larson(Room* room) : Enemy(room, 50, 102, 0, AGGRESSION_LVL_MAX) {}
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++            return goalState;
++        // as in the original: Pierre cannot be killed until his last appearance (Tomb of
++        // Tihocan, marked "once" in the level) - before that he only gets away
++        if (!(flags & ITEM_FLAG_ONCE) && health <= 40) {
++            health = 40;
++            mood = MOOD_ESCAPE;
++        }
++        if (nextState == state)
++            nextState = STATE_NONE;
++        return updateWalker(25, 2);
++    }
+ };
+ 
+ 
+-struct Pierre : Enemy
++struct Skater : Human
+ {
+-    Pierre(Room* room) : Enemy(room, 70, 102, 0, AGGRESSION_LVL_MAX) {}
+-};
++    enum {
++        SK_STOP,
++        SK_STAND_FIRE,
++        SK_MOVE,
++        SK_STEP,
++        SK_MOVE_FIRE,
++        SK_DEATH
++    };
+ 
++    Skater(Room* room) : Human(room, 125, 204) {}
+ 
+-struct Skater : Enemy
+-{
+-    Skater(Room* room) : Enemy(room, 125, 204, 0, AGGRESSION_LVL_MAX) {}
++    virtual int32 deathAnim() { return 13; }
+ 
+     virtual void hit(int32 damage, const vec3i &point, int32 soundId)
+     {
+-        Enemy::hit(damage, point, SND_HIT_SKATER);
++        Human::hit(damage, point, SND_HIT_SKATER);
++    }
++
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++            return goalState;
++
++        switch (state)
++        {
++            case SK_STOP:
++            {
++                nextState = 0;
++                return canSee(DIST_SHOT) ? SK_STAND_FIRE : SK_MOVE;
++            }
++
++            case SK_MOVE:
++            {
++                nextState = 0;
++                extraE->maxTurn = ANGLE(4);
++                tinfo.tilt = tinfo.turn;
++                if (rand_logic() < 512)
++                    return SK_STEP;
++                if (canSee(DIST_SHOT))
++                    return (mood != MOOD_ESCAPE && tinfo.dist > 2560 && tinfo.dist < 4096) ? SK_STOP : SK_MOVE_FIRE;
++                break;
++            }
++
++            case SK_STEP:
++            {
++                extraE->maxTurn = ANGLE(4);
++                if (rand_logic() < 1024)
++                    return SK_MOVE;
++                break;
++            }
++
++            case SK_STAND_FIRE:
++            case SK_MOVE_FIRE:
++            {
++                if (state == SK_MOVE_FIRE)
++                    extraE->maxTurn = ANGLE(4);
++                if (!nextState && canSee(DIST_SHOT)) {
++                    int32 damage = (state == SK_STAND_FIRE) ? 50 : 40;
++                    shoot(damage, DIST_SHOT);
++                    shoot(damage, DIST_SHOT);
++                    nextState = 1;
++                }
++                if (mood == MOOD_ESCAPE || tinfo.dist < 1024)
++                    return SK_MOVE;
++                break;
++            }
++        }
++
++        return goalState;
+     }
+ };
+ 
+ 
+-struct Cowboy : Enemy
++struct Cowboy : Human
+ {
+-    Cowboy(Room* room) : Enemy(room, 150, 102, 0, AGGRESSION_LVL_MAX) {}
++    Cowboy(Room* room) : Human(room, 150, 102) {}
++
++    virtual int32 deathAnim() { return 7; }
++
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++            return goalState;
++        if (nextState == state)
++            nextState = STATE_NONE;
++        return updateGunner(70, 2, 3072);
++    }
+ };
+ 
+ 
+-struct MrT : Enemy
++struct MrT : Human
+ {
+-    MrT(Room* room) : Enemy(room, 200, 102, 0, AGGRESSION_LVL_MAX) {}
++    MrT(Room* room) : Human(room, 200, 102) {}
++
++    virtual int32 deathAnim() { return 14; }
++
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++            return goalState;
++        if (nextState == state)
++            nextState = STATE_NONE;
++        return updateGunner(150, 1, 4096);
++    }
+ };
+ 
+ 
+-struct Natla : Enemy
++struct Natla : Human
+ {
+-    Natla(Room* room) : Enemy(room, 400, 204, 0, AGGRESSION_LVL_MAX) {}
++    // ENEMIES-2: Natla.  Stage 1 (health above 200): flies when she cannot shoot you, lands and
++    // fires three bolts.  At 200 she faints; after a while she gets up for stage 2: she runs
++    // and keeps shooting until she dies.
++    enum {
++        N_NONE,
++        N_STOP,
++        N_FLY,
++        N_RUN,
++        N_AIM,
++        N_FAINT,
++        N_FIRE,
++        N_FALL,
++        N_STAND,
++        N_DEATH
++    };
++
++    enum {
++        HALF_HEALTH  = 200,
++        FAINT_HEALTH = -8192,
++        WAKE_CHANCE  = 68           // ~16 s of fainting on average
++    };
++
++    Natla(Room* room) : Human(room, 400, 204) {}
++
++    void fly(bool on)
++    {
++        extraE->nav.stepHeight = on ? 256 * 80 : 256;
++        extraE->nav.dropHeight = on ? -256 * 80 : -256;
++        extraE->nav.vSpeed = on ? 16 : 0;
++    }
++
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++        {
++            if (health == FAINT_HEALTH)                 // fainted, not dead
++            {
++                fly(false);
++                if (state == N_FALL) {
++                    if (pos.y < roomFloor) {
++                        flags |= ITEM_FLAG_GRAVITY;
++                        return N_FALL;
++                    }
++                    flags &= ~ITEM_FLAG_GRAVITY;
++                    pos.y = roomFloor;
++                    return N_FAINT;
++                }
++                if (state == N_FAINT && rand_logic() < WAKE_CHANCE) {
++                    health = HALF_HEALTH;
++                    return N_STAND;
++                }
++                return state == N_FAINT ? N_FAINT : goalState;
++            }
++            return N_DEATH;
++        }
++
++        if (nextState == state)
++            nextState = N_NONE;
++
++        bool canShot = tinfo.target && tinfo.target->health > 0 && canSee(DIST_SHOT);
++
++        if (health > HALF_HEALTH)                       // stage 1
++        {
++            bool flying = (state == N_FLY) && !(canShot && rand_logic() < 256);
++            fly(state == N_FLY);
++            extraE->maxTurn = ANGLE(3);
++
++            switch (state)
++            {
++                case N_STOP:
++                    return canShot ? N_AIM : N_FLY;
++
++                case N_FLY:
++                {
++                    if (canShot && rand_logic() < 0x0400)      // about one bolt a second
++                        shoot(100, DIST_SHOT);
++                    if (!flying && pos.y >= roomFloor - 128)
++                        return N_STOP;
++                    break;
++                }
++
++                case N_AIM:
++                {
++                    if (nextState)
++                        return nextState;
++                    return canShot ? N_FIRE : N_STOP;
++                }
++
++                case N_FIRE:
++                {
++                    if (!nextState) {
++                        shoot(100, DIST_SHOT);
++                        shoot(100, DIST_SHOT);
++                        shoot(100, DIST_SHOT);
++                        nextState = N_STOP;
++                    }
++                    break;
++                }
++            }
++            return goalState;
++        }
++
++        // stage 2
++        fly(false);
++        switch (state)
++        {
++            case N_RUN:
++            case N_STAND:
++            {
++                extraE->maxTurn = (state == N_RUN) ? ANGLE(6) : ANGLE(3);
++                if (state == N_RUN)
++                    tinfo.tilt = tinfo.turn;
++                if (canShot && rand_logic() < 0x0600)      // about every 2/3 s
++                    shoot(50, DIST_SHOT);
++                return (canShot && abs(tinfo.angle) < ANGLE(30)) ? N_STAND : N_RUN;
++            }
++
++            case N_FLY:
++                health = FAINT_HEALTH;
++                return N_FALL;
++
++            case N_STOP:
++            case N_AIM:
++            case N_FIRE:
++                health = FAINT_HEALTH;
++                return N_FAINT;
++        }
++        return goalState;
++    }
+ };
+ 
+ 
+ struct Adam : Enemy
+ {
++    // ENEMIES-2: the giant mutant ("Torso", Great Pyramid).  Ported from the full engine.
++    enum {
++        HIT_MASK_HAND  = 0x3FF8000,
++        HIT_MASK_HANDS = 0x3FFFFF0,
++        DAMAGE         = 500,
++        DAMAGE_WALK    = 5,
++        DAMAGE_FATAL   = 1000,
++        DIST_ATTACK    = 2600,
++        DIST_FATAL     = 2250,
++        ANIM_DEATH     = 13
++    };
++
++    enum {
++        STATE_NONE,
++        STATE_STOP,
++        STATE_TURN_LEFT,
++        STATE_TURN_RIGHT,
++        STATE_ATTACK_1,
++        STATE_ATTACK_2,
++        STATE_ATTACK_3,
++        STATE_WALK,
++        STATE_BORN,
++        STATE_FALL,
++        STATE_UNUSED,
++        STATE_FATAL
++    };
++
+     Adam(Room* room) : Enemy(room, 500, 341, 0, AGGRESSION_LVL_MAX) {}
+ 
+     virtual void hit(int32 damage, const vec3i &point, int32 soundId)
+     {
+         Enemy::hit(damage, point, SND_HIT_ADAM);
++        if (health <= 0)
++            animSet(level.models[type].animIndex + ANIM_DEATH, true);
++    }
++
++    virtual int32 updateState()
++    {
++        if (health <= 0)
++            return goalState;
++
++        if (state == STATE_BORN)
++            return STATE_FALL;
++
++        if (state == STATE_FALL)
++        {
++            if (pos.y < roomFloor) {
++                flags |= ITEM_FLAG_GRAVITY;
++                return STATE_FALL;
++            }
++            flags &= ~ITEM_FLAG_GRAVITY;
++            pos.y = roomFloor;
++            return STATE_STOP;
++        }
++
++        if (!tinfo.target || tinfo.target->health <= 0)
++            return STATE_STOP;
++
++        if (hitMask)
++            tinfo.target->hit(DAMAGE_WALK, tinfo.target->pos, 0);
++
++        if (state == STATE_STOP || state == STATE_WALK || state == STATE_TURN_LEFT || state == STATE_TURN_RIGHT)
++            extraE->maxTurn = (abs(tinfo.angle) > ANGLE(10)) ? ANGLE(3) : 0;
++
++        switch (state)
++        {
++            case STATE_STOP:
++            {
++                nextState = STATE_NONE;
++                if (tinfo.angle > ANGLE(45))
++                    return STATE_TURN_RIGHT;
++                if (tinfo.angle < -ANGLE(45))
++                    return STATE_TURN_LEFT;
++                if (tinfo.dist < DIST_ATTACK) {
++                    if (tinfo.target->health <= DAMAGE) {
++                        if (tinfo.dist < DIST_FATAL)
++                            return STATE_ATTACK_3;
++                    } else {
++                        return (rand_logic() & 1) ? STATE_ATTACK_1 : STATE_ATTACK_2;
++                    }
++                }
++                return STATE_WALK;
++            }
++
++            case STATE_WALK:
++            {
++                if (tinfo.dist < DIST_ATTACK || tinfo.angle > ANGLE(45) || tinfo.angle < -ANGLE(45))
++                    return STATE_STOP;
++                break;
++            }
++
++            case STATE_TURN_RIGHT:
++            {
++                if (tinfo.angle < ANGLE(45))
++                    return STATE_STOP;
++                break;
++            }
++
++            case STATE_TURN_LEFT:
++            {
++                if (tinfo.angle > -ANGLE(45))
++                    return STATE_STOP;
++                break;
++            }
++
++            case STATE_ATTACK_1:
++            case STATE_ATTACK_2:
++            {
++                if (!nextState && (((state == STATE_ATTACK_1) && (hitMask & HIT_MASK_HAND)) ||
++                                   ((state == STATE_ATTACK_2) && (hitMask & HIT_MASK_HANDS)))) {
++                    tinfo.target->hit(DAMAGE, tinfo.target->pos, 0);
++                    nextState = STATE_STOP;
++                }
++                break;
++            }
++
++            case STATE_ATTACK_3:
++            {
++                if (hitMask & HIT_MASK_HAND) {
++                    tinfo.target->hit(DAMAGE_FATAL, tinfo.target->pos, 0);
++                    return STATE_FATAL;
++                }
++                break;
++            }
++        }
++
++        return goalState;
+     }
+ };
+ 
+diff --git a/src/fixed/inventory.h b/src/fixed/inventory.h
+index 4689809..79e38bb 100644
+--- a/src/fixed/inventory.h
++++ b/src/fixed/inventory.h
+@@ -1247,8 +1247,32 @@ struct Inventory
+             {
+                 if (passportPage == PASSPORT_PAGE_LOAD_GAME)
+                 {
++                #ifdef CD32X
++                    /* CD32X passport: every level is on the disc */
++                    static const struct { LevelID id; StringID str; } passportLevels[] = {
++                        { LVL_TR1_1, STR_TR1_LEVEL1 },
++                        { LVL_TR1_2, STR_TR1_LEVEL2 },
++                        { LVL_TR1_3A, STR_TR1_LEVEL3A },
++                        { LVL_TR1_3B, STR_TR1_LEVEL3B },
++                        { LVL_TR1_4, STR_TR1_LEVEL4 },
++                        { LVL_TR1_5, STR_TR1_LEVEL5 },
++                        { LVL_TR1_6, STR_TR1_LEVEL6 },
++                        { LVL_TR1_7A, STR_TR1_LEVEL7A },
++                        { LVL_TR1_7B, STR_TR1_LEVEL7B },
++                        { LVL_TR1_8A, STR_TR1_LEVEL8A },
++                        { LVL_TR1_8B, STR_TR1_LEVEL8B },
++                        { LVL_TR1_8C, STR_TR1_LEVEL8C },
++                        { LVL_TR1_10A, STR_TR1_LEVEL10A },
++                        { LVL_TR1_10B, STR_TR1_LEVEL10B },
++                        { LVL_TR1_10C, STR_TR1_LEVEL10C },
++                    };
++                    for (int32 i = 0; i < int32(sizeof(passportLevels) / sizeof(passportLevels[0])); i++) {
++                        OPTION_BTN(passportLevels[i].str, passportLevels[i].id);
++                    }
++                #else
+                     OPTION_BTN(STR_TR1_LEVEL1, LVL_TR1_1);
+                     OPTION_BTN(STR_TR1_LEVEL2, LVL_TR1_2);
++                #endif
+                     if (osCheckSave())
+                     {
+                         OPTION_SPACE();
+@@ -1306,6 +1330,19 @@ struct Inventory
+ 
+         int32 w = optionsWidth;
+         int32 h = optionsHeight;
++
++        /* CD32X passport: a list taller than the screen scrolls (8 rows visible) */
++        enum { OPT_VISIBLE = 8 };
++        int32 first = 0, last = optionsCount;
++        if (optionsCount > OPT_VISIBLE && h > OPT_VISIBLE * 18 + 4)
++        {
++            first = optionIndex - OPT_VISIBLE / 2;
++            if (first > optionsCount - OPT_VISIBLE) first = optionsCount - OPT_VISIBLE;
++            if (first < 0) first = 0;
++            last = first + OPT_VISIBLE;
++            h = OPT_VISIBLE * 18 + 4;
++        }
++
+         int32 y = (FRAME_HEIGHT - h) / 2 - 12;
+ 
+         renderFill((FRAME_WIDTH - w) / 2 + 1, y + 1, w - 2, h - 2, 25, 2);
+@@ -1315,7 +1352,7 @@ struct Inventory
+         h = 18;
+         y += 2;
+ 
+-        for (int32 i = 0; i < optionsCount; i++)
++        for (int32 i = first; i < last; i++)
+         {
+             const Option &opt = options[i];
+ 
+diff --git a/src/fixed/item.h b/src/fixed/item.h
+index 3a104dd..fddfd82 100644
+--- a/src/fixed/item.h
++++ b/src/fixed/item.h
+@@ -29,7 +29,7 @@ int32 alignOffset(int32 a, int32 b)
+ 
+ void* soundPlay(int16 id, const vec3i* pos)
+ {
+-#if defined(__32X__) || defined(__WIN32__) // TODO
++#if (defined(__32X__) && !defined(CD32X)) || defined(__WIN32__) // TODO  (OL-6: CD32X plays sounds)
+     return NULL;
+ #endif
+ 
+diff --git a/src/fixed/lara.h b/src/fixed/lara.h
+index 846ca62..0d185f2 100644
+--- a/src/fixed/lara.h
++++ b/src/fixed/lara.h
+@@ -2807,11 +2807,15 @@ struct Lara : ItemObj
+         if (keys & IK_UP)      input |= IN_UP;
+         if (keys & IK_DOWN)    input |= IN_DOWN;
+         if (keys & IK_SELECT)  input |= IN_SELECT;
++    #ifdef CD32X
++        if (keys & IK_START)   input |= IN_SELECT;  // CD32X: Start opens the inventory (as Mode)
++    #endif
+ 
+         if (extraL->camera.mode == CAMERA_MODE_FREE) {
+             input = 0;
+         }
+ 
++    #ifndef CD32X   // CD32X: no developer free camera on Start
+         if (keys & IK_START)   input |= IN_START;
+ 
+         if (isKeyHit(IN_START) && (inventory.state == INV_STATE_NONE))
+@@ -2822,6 +2826,7 @@ struct Lara : ItemObj
+                 extraL->camera.mode = CAMERA_MODE_FOLLOW;
+             }
+         }
++    #endif
+     }
+ 
+     void updateLook()
+diff --git a/src/platform/32x/Makefile b/src/platform/32x/Makefile
+index bbc4d90..4476dc9 100644
+--- a/src/platform/32x/Makefile
++++ b/src/platform/32x/Makefile
+@@ -28,6 +28,14 @@ LIBPATH = -L$(ROOTDIR)/sh-elf/lib -L$(ROOTDIR)/sh-elf/lib/gcc/sh-elf/$(CC_VER) -
+ INCPATH = -I. -I../../fixed -I$(ROOTDIR)/sh-elf/include -I$(ROOTDIR)/sh-elf/sh-elf/include
+ 
+ SHCCFLAGS = -D__32X__ -m2 -mb -O2 -Wall -Wno-class-memaccess -g -c -fno-rtti -fno-exceptions -fomit-frame-pointer -fshort-enums -frandom-seed=0
++
++# CD32X build (Sega CD + 32X + RAM cart): make CD32X=1  (rm -rf build first)
++ifdef CD32X
++SHCCFLAGS += -DCD32X
++# OL-2: asm/*.s go through the C preprocessor with INCPATH only - so the define goes there
++# too (asm/data.s leaves the levels out of the ROM in the CD32X build)
++CPPDEFS += -DCD32X
++endif
+ SHLDFLAGS = -T $(LDSCRIPTSDIR)/mars.ld -Wl,-Map=$(BUILD)/output.map -nostdlib
+ SHASFLAGS = --big
+ 
+@@ -75,7 +83,7 @@ $(BUILD)/%.o: %.s
+ 	$(SHAS) $(SHASFLAGS) $(INCPATH) -o $@ $<
+ 
+ $(BUILD)/%.o: asm/%.s
+-	$(SHPP) $(INCPATH) -o $(BUILD)/$(notdir $<) $<
++	$(SHPP) $(INCPATH) $(CPPDEFS) -o $(BUILD)/$(notdir $<) $<
+ 	$(SHAS) $(SHASFLAGS) $(INCPATH) -o $@ $(BUILD)/$(notdir $<)
+ 
+ $(BUILD)/%.o: %.c
+diff --git a/src/platform/32x/asm/data.s b/src/platform/32x/asm/data.s
+index dcd12ee..0306ed8 100644
+--- a/src/platform/32x/asm/data.s
++++ b/src/platform/32x/asm/data.s
+@@ -1,12 +1,7 @@
+         .text
+-/*
+-        .global _TITLE_PKD
+-        .align  4
+-_TITLE_PKD:
+-        .long TITLE
+-TITLE:
+-        .incbin "data/TITLE.PKD"
+-*/
++#ifndef CD32X
++/* cartridge build: the levels are part of the ROM.
++   CD32X build: no levels here - osLoadLevel() loads them from the CD into the cart. */
+         .global _LEVEL1_PKD
+         .align  4
+ _LEVEL1_PKD:
+@@ -15,3 +10,21 @@ LEVEL1:
+         .incbin "data/LEVEL1.PKD"
+ 
+         .align  4
++
++        .global _LEVEL2_PKD
++        .align  4
++_LEVEL2_PKD:
++        .long LEVEL2
++LEVEL2:
++        .incbin "data/LEVEL2.PKD"
++#else
++/* OL-3: the loading screen (tools/make_ol_splash.py -> data/SPLASH.BIN) */
++        .global _SPLASH_BIN
++        .align  4
++_SPLASH_BIN:
++        .long SPLASH
++        .align  4
++SPLASH:
++        .incbin "data/SPLASH.BIN"
++#endif
++        .align  4
+diff --git a/src/platform/32x/main.cpp b/src/platform/32x/main.cpp
+index 42f1f7e..3156f18 100644
+--- a/src/platform/32x/main.cpp
++++ b/src/platform/32x/main.cpp
+@@ -1,10 +1,206 @@
+ const void* TRACKS_IMA;
+ const void* TITLE_SCR;
+ 
++#ifndef CD32X
+ extern void* LEVEL1_PKD;
++extern void* LEVEL2_PKD;
++#endif
+ 
+ #include "game.h"
+ 
++#ifdef CD32X
++/* ---------------------------------------------------------------------------------------
++ * CD32X build (Sega CD + 32X + 4 MB RAM cart).
++ * The Genesis side does NOT run OpenLara's own 68000 code (src-md).  The 68000 stays in the
++ * CD32X listener (hw_md.s) and the Sub-CPU service loop (Demo/main.c) answers requests the
++ * master SH2 writes to COMM0, exactly like Kobo and the D32XR loader:
++ *   SH2 writes COMM0 = command, the Sub-CPU replies and clears COMM0 when done.
++ * --------------------------------------------------------------------------------------- */
++#define CD_CMD_GET_PAD      48      /* reply: pad 1 bits (SEGA_CTRL_*) in COMM8 */
++#define CD_CMD_TEXT_ONOFF   52      /* COMM2 = 1 on / 0 off - Genesis display */
++#define CD_CMD_SFX_LOAD     53      /* OL-6: COMM2 = level -> SFX<level>.BIN into the PCM chip */
++int32 sndTakePending();             /* OL-6: sound.cpp - this frame's sound effect (0 = none) */
++
++static void cdPause()               /* hardware rule: never hammer a COMM register */
++{
++    for (volatile int32 k = 0; k < 64; k++) {}
++}
++
++static void cdCmd(uint16 cmd)
++{
++    MARS_SYS_COMM0 = cmd;
++    for (int32 n = 0; n < 2000000 && MARS_SYS_COMM0 != 0; n++)
++        cdPause();
++}
++
++/* ---------------------------------------------------------------------------------------
++ * OL-2b: levels are loaded from the CD into the RAM cart (cart offset 2 MB = slot 16).
++ *   CMD 38 with COMM2 = 100 + LevelID opens "<level>.PKD" (subcpu/main.c maps the names),
++ *   then CMD 46 per 32 KB chunk: the Sub-CPU reads the sectors and the 68000 copies them
++ *   into the cart, with RV = 1 for the copy.
++ * NO PARKING, NO SDRAM CODE: while RV = 1 an SH2 access to the cart is simply HELD until the
++ *   68000 clears RV again (D32XR/SRB32X rely on this: their 68000 sets RV for VDP DMA and
++ *   SRAM saves while both SH2s run from the cartridge).  So both SH2s stay in their normal
++ *   code; they just pause for the few milliseconds of each copy.
++ * After the load both SH2s clear their caches (the old level may still be cached).
++ * Status codes in COMM12 (the Sub-CPU shows them as STATE: when the green text is on):
++ *   4Fxx loading level xx   4E8n chunk n done   4E14 level ready   4B10 game loop running
++ *   4EE1 file not on the disc   4EE2 bad chunk(s)   4EE3/4EE4 the Sub-CPU did not answer
++ * --------------------------------------------------------------------------------------- */
++#define CD_CMD_OPEN_FILE      38
++#define CD_CMD_CHUNK_TO_CART  46
++#define CD_FILE_LEVEL_BASE    100           /* subcpu/main.c: 100 + LevelID -> .PKD, slot 16 */
++#define CD_LEVEL_CART         0x02200000    /* cart offset 0x200000 as the SH2 sees it      */
++#define MARS_CMD_CACHE        0x7A5B        /* slave command: clear your cache              */
++#define CD_STATE(code)        (*(volatile uint16 *)0x2000402C = (uint16)(code))   /* COMM12 */
++#define CD_COMM8_32           (*(volatile uint32 *)0x20004028)
++#define CD_COMM12_16          (*(volatile uint16 *)0x2000402C)
++#define CD32X_TEXT            0             /* OL-3: no green/white text - splash screen instead */
++
++/* ---------------------------------------------------------------------------------------
++ * OL-3: loading screen.  SPLASH.BIN (tools/make_ol_splash.py, built into the ROM by asm/data.s):
++ *   256 palette entries (32X BGR555, big-endian), then 320 x 180 pixels, one byte each.
++ *   Indices 0-251 = the picture, 252 black, 253 bar background, 254 bar (red), 255 bar edge.
++ * Both frame buffers get the picture; the red bar along the bottom grows after every chunk.
++ * All frame-buffer writes are 16-bit (KOBO doc, rule 4).
++ * --------------------------------------------------------------------------------------- */
++extern void* SPLASH_BIN;                           /* asm/data.s */
++#define SPL_W       320
++#define SPL_H       180
++#define SPL_TOP     14
++#define BAR_X0      14                             /* outer edge, even */
++#define BAR_X1      306                            /* outer edge, exclusive, even */
++#define BAR_Y0      198
++#define BAR_Y1      214
++#define C_BLACK     252
++#define C_BARBG     253
++#define C_BAR       254
++#define C_EDGE      255
++
++void osSetPalette(const uint16* palette);
++void pageWait();
++void pageFlip();
++void pageClear();
++static const uint16* gGamePalette = 0;             /* OL-3: the game palette, restored after a load */
++
++static uint8 splashBarColor(int32 x, int32 y, int32 fill)
++{
++    if (y < BAR_Y0 + 2 || y >= BAR_Y1 - 2 || x < BAR_X0 + 2 || x >= BAR_X1 - 2)
++        return C_EDGE;
++    return (x - (BAR_X0 + 2) < fill) ? C_BAR : C_BARBG;
++}
++
++static void splashBar(int32 done, int32 total)
++{
++    int32 inner = (BAR_X1 - 2) - (BAR_X0 + 2);
++    int32 fill = (total > 0) ? (inner * done) / total : 0;
++    volatile uint16* fb = (volatile uint16*)&MARS_FRAMEBUFFER + 0x100;
++    for (int32 y = BAR_Y0; y < BAR_Y1; y++)
++    {
++        volatile uint16* row = fb + y * (FRAME_WIDTH / 2);
++        for (int32 x = BAR_X0; x < BAR_X1; x += 2)
++            row[x >> 1] = (uint16)((splashBarColor(x, y, fill) << 8) | splashBarColor(x + 1, y, fill));
++    }
++}
++
++static void splashPage(int32 done, int32 total)
++{
++    volatile uint16* fb = (volatile uint16*)&MARS_FRAMEBUFFER + 0x100;
++    const uint16* pix = (const uint16*)((const uint8*)SPLASH_BIN + 512);
++    const uint16 black = (C_BLACK << 8) | C_BLACK;
++    for (int32 y = 0; y < FRAME_HEIGHT; y++)
++    {
++        volatile uint16* row = fb + y * (FRAME_WIDTH / 2);
++        if (y >= SPL_TOP && y < SPL_TOP + SPL_H)
++        {
++            const uint16* src = pix + (y - SPL_TOP) * (SPL_W / 2);
++            for (int32 x = 0; x < FRAME_WIDTH / 2; x++)
++                row[x] = src[x];
++        }
++        else
++        {
++            for (int32 x = 0; x < FRAME_WIDTH / 2; x++)
++                row[x] = black;
++        }
++    }
++    splashBar(done, total);
++}
++
++static void splashBegin()
++{
++    const uint16* gamePal = gGamePalette;
++    osSetPalette((const uint16*)SPLASH_BIN);       /* the picture's own colours */
++    gGamePalette = gamePal;                        /* ...but remember the game's */
++    for (int32 i = 0; i < 2; i++)                  /* the same picture in both buffers */
++    {
++        pageWait();
++        splashPage(0, 1);
++        pageFlip();
++    }
++    pageWait();
++}
++
++static void splashProgress(int32 done, int32 total)
++{
++    for (int32 i = 0; i < 2; i++)                  /* bar in both buffers, shown at once */
++    {
++        splashBar(done, total);
++        pageFlip();
++        pageWait();
++    }
++}
++
++static void splashEnd()
++{
++    for (int32 i = 0; i < 2; i++)                  /* nothing of the picture left behind */
++    {
++        pageClear();
++        pageFlip();
++        pageWait();
++    }
++    if (gGamePalette)
++        osSetPalette(gGamePalette);
++}
++
++/* returns the file length, -1 not on the disc, -2 bad chunk(s), -3/-4 no answer */
++static int32 cdLoadToCart(uint16 file)
++{
++    MARS_SYS_COMM2 = file;
++    cdCmd(CD_CMD_OPEN_FILE);
++    if (MARS_SYS_COMM0 != 0)
++        return -3;
++    int32 len = (int32)CD_COMM8_32;                 /* CMD 46 reads it back from COMM8 */
++    if (len <= 0)
++        return -1;
++
++    int32 bad = 0;
++    uint32 chunks = ((uint32)len + 32767) >> 15;
++    for (uint32 c = 0; c < chunks; c++)
++    {
++        MARS_SYS_COMM2 = (uint16)(c | 0x8000);     /* OL-13: no read-back (faster) */
++        CD_COMM12_16 = 0;                           /* the Sub-CPU replies 0 = done */
++        cdCmd(CD_CMD_CHUNK_TO_CART);
++        if (MARS_SYS_COMM0 != 0)
++            return -4;
++        if (CD_COMM12_16 != 0)
++            bad++;
++        CD_STATE(0x4E80 | (c & 0x7F));              /* progress */
++        splashProgress((int32)c + 1, (int32)chunks);   /* OL-3: the red bar grows */
++    }
++    return bad ? -2 : len;
++}
++
++static void cdLoadFailed()                  /* red screen = a level could not be loaded */
++{
++    for (int32 i = 0; i < 256; i++)
++    {
++        while ((MARS_VDP_FBCTL & MARS_VDP_PEN) == 0);  /* palette writable only in blanking */
++        (&MARS_CRAM)[i] = 0x001F;
++    }
++    while (1) {}
++}
++#endif
++
+ volatile unsigned mars_frt_ovf_count = 0;
+ 
+ extern "C" {
+@@ -26,6 +222,9 @@ int32 fps;
+ 
+ void osSetPalette(const uint16* palette)
+ {
++#ifdef CD32X
++    gGamePalette = palette;
++#endif
+     void *dst = (void*)&MARS_CRAM;
+     memcpy(dst, palette, 256 * 2);
+ }
+@@ -35,6 +234,158 @@ int32 osGetSystemTimeMS()
+     return int32((mars_pwdt_ovf_count << 8) | SH2_WDT_RTCNT);
+ }
+ 
++#ifdef CD32X
++/* ---------------------------------------------------------------------------------------
++ * OL-8: settings + saved game in the RAM CART (battery-backed, MicroNut99 4 MB cart), in its
++ *   last 64 KB (cart offset 0x3F0000) - the loader and the levels never reach that far.
++ *   Why not the Sega CD backup RAM: it holds only 8 KB in total, too small for the saves of
++ *   the bigger levels, and every word had to travel through the Sub-CPU.  The SH2 writes the
++ *   cart directly, 16 bits at a time, cache-through, and reads every word back to check it.
++ *   0x3F0000  'OLST' + settings size + settings        0x3F0400  'OLGM' + size + SaveGame + data
++ * --------------------------------------------------------------------------------------- */
++#define CS_BASE         0x22000000          /* cart, cache-through, as the SH2 sees it */
++#define CS_SET          0x3F0000
++#define CS_GAME         0x3F0400
++#define CS_GAME_MAX     0xF000
++#define CS_EVEN(x)      (((x) + 1) & ~1)
++
++
++static void cartRead(uint32 ofs, uint8* dst, int32 len)               /* ofs even */
++{
++    volatile uint16* s = (volatile uint16*)(CS_BASE + ofs);
++    for (int32 i = 0; i < len; i += 2)
++    {
++        uint16 w = s[i >> 1];
++        dst[i] = (uint8)(w >> 8);
++        if (i + 1 < len) dst[i + 1] = (uint8)w;
++    }
++}
++
++/* OL-9: the SH2 cannot write the cart.  Writes collect in one 4 KB piece of the save area;
++   a full piece goes to the Sub-CPU's buffer (CMD 58, word by word) and CMD 61 lets the 68000
++   copy it into the cart and check it.  Reads stay direct (cartRead). */
++#define CS_PIECE        4096
++#define CS_CMD_PUT      58
++#define CS_CMD_TO_CART  61
++static uint8 csBuf[CS_PIECE];
++static int32 csPiece = -1;
++static bool  csDirty = false;
++static bool  csOk = true;
++
++static void csFlushPiece()
++{
++    if (csPiece < 0 || !csDirty) return;
++    for (int32 w = 0; w < CS_PIECE / 2; w++)
++    {
++        MARS_SYS_COMM8 = (uint16)((csBuf[w * 2] << 8) | csBuf[w * 2 + 1]);
++        MARS_SYS_COMM2 = (uint16)w;
++        cdCmd(CS_CMD_PUT);
++    }
++    MARS_SYS_COMM2 = (uint16)csPiece;
++    CD_COMM12_16 = 0;
++    cdCmd(CS_CMD_TO_CART);
++    if (CD_COMM12_16 != 1) csOk = false;
++    csDirty = false;
++}
++
++static bool csEnd()                                  /* write what is left, report */
++{
++    csFlushPiece();
++    bool ok = csOk;
++    csOk = true;
++    return ok;
++}
++
++static void cartRead(uint32 ofs, uint8* dst, int32 len);
++
++static bool cartWrite(uint32 ofs, const uint8* src, int32 len)
++{
++    while (len > 0)
++    {
++        int32 piece = int32(ofs - CS_SET) >> 12;
++        uint32 base = CS_SET + uint32(piece) * CS_PIECE;
++        if (piece != csPiece)
++        {
++            csFlushPiece();
++            cartRead(base, csBuf, CS_PIECE);
++            csPiece = piece;
++        }
++        int32 o = int32(ofs - base);
++        int32 n = (len < CS_PIECE - o) ? len : (CS_PIECE - o);
++        memcpy(csBuf + o, src, n);
++        csDirty = true;
++        ofs += n; src += n; len -= n;
++    }
++    return true;
++}
++
++static uint32 cartRead32(uint32 ofs)
++{
++    volatile uint16* s = (volatile uint16*)(CS_BASE + ofs);
++    return ((uint32)s[0] << 16) | s[1];
++}
++
++static bool cartWrite32(uint32 ofs, uint32 v)
++{
++    uint8 b[4] = { uint8(v >> 24), uint8(v >> 16), uint8(v >> 8), uint8(v) };
++    return cartWrite(ofs, b, 4);
++}
++
++bool osSaveSettings()
++{
++    cartWrite32(CS_SET, 0);                                     /* invalid while writing */
++    if (!cartWrite32(CS_SET + 4, sizeof(gSettings))) return false;
++    if (!cartWrite(CS_SET + 8, (const uint8*)&gSettings, sizeof(gSettings))) return false;
++    cartWrite32(CS_SET, 0x4F4C5354);                            /* 'OLST' last */
++    return csEnd();                                             /* OL-9 */
++}
++
++bool osLoadSettings()
++{
++    if (cartRead32(CS_SET) != 0x4F4C5354 || cartRead32(CS_SET + 4) != sizeof(gSettings))
++        return false;
++    uint8 version;
++    cartRead(CS_SET + 8, &version, 1);
++    if (version != gSettings.version)
++        return false;
++    cartRead(CS_SET + 8, (uint8*)&gSettings, sizeof(gSettings));
++    return true;
++}
++
++bool osCheckSave()
++{
++    if (cartRead32(CS_GAME) != 0x4F4C474D) return false;        /* 'OLGM' */
++    uint32 size = cartRead32(CS_GAME + 4);
++    if (size < sizeof(gSaveGame) || size > CS_GAME_MAX) return false;
++    uint32 version;
++    cartRead(CS_GAME + 8, (uint8*)&version, sizeof(version));
++    return version == SAVEGAME_VER;
++}
++
++bool osSaveGame()
++{
++    uint32 hdr = CS_EVEN(sizeof(gSaveGame));
++    uint32 size = hdr + gSaveGame.dataSize;
++    if (size > CS_GAME_MAX) return false;
++    cartWrite32(CS_GAME, 0);                                    /* invalid while writing */
++    if (!cartWrite32(CS_GAME + 4, size)) return false;
++    if (!cartWrite(CS_GAME + 8, (const uint8*)&gSaveGame, sizeof(gSaveGame))) return false;
++    if (!cartWrite(CS_GAME + 8 + hdr, gSaveData, gSaveGame.dataSize)) return false;
++    cartWrite32(CS_GAME, 0x4F4C474D);                           /* 'OLGM' last */
++    return csEnd();                                             /* OL-9 */
++}
++
++bool osLoadGame()
++{
++    if (!osCheckSave()) return false;
++    SaveGame tmp;
++    cartRead(CS_GAME + 8, (uint8*)&tmp, sizeof(tmp));
++    if (int32(tmp.dataSize) > int32(sizeof(gSaveData))) return false;
++    gSaveGame = tmp;
++    cartRead(CS_GAME + 8 + CS_EVEN(sizeof(gSaveGame)), gSaveData, gSaveGame.dataSize);
++    return true;
++}
++#else
+ bool osSaveSettings()
+ {
+     return false;
+@@ -59,6 +410,7 @@ bool osLoadGame()
+ {
+     return false;
+ }
++#endif
+ 
+ void osJoyVibrate(int32 index, int32 L, int32 R)
+ {
+@@ -69,6 +421,9 @@ void updateInput()
+ {
+     keys = 0;
+ 
++#ifdef CD32X
++    cdCmd((uint16)(CD_CMD_GET_PAD | (sndTakePending() << 8)));   /* pad -> COMM8, OL-6: + sound effect */
++#endif
+     uint16 mask = MARS_SYS_COMM8;
+     if (mask & SEGA_CTRL_UP)      keys |= IK_UP;
+     if (mask & SEGA_CTRL_RIGHT)   keys |= IK_RIGHT;
+@@ -89,10 +444,53 @@ const void* osLoadScreen(LevelID id)
+     return TITLE_SCR;
+ }
+ 
++#ifdef CD32X
++static int32 gCartLevel = -1;                      /* OL-2c: the level now in the cart */
++static int32 gGameLoop = 0;                        /* OL-2c: the game loop has started */
++
++const void* osLoadLevel(LevelID id)
++{
++    /* the title "level" has always been Level 1 on the 32X (TITLE.PKD was never used);
++       ids past Atlantis (Unfinished Business, ...) were not converted */
++    if (id == LVL_TR1_TITLE || id > LVL_TR1_10C)
++        id = LVL_TR1_1;
++
++    MARS_WAIT();                                   /* slave idle (it just pauses during RV) */
++    if (id == gCartLevel)                          /* OL-2c: already there - no reload */
++        return (const void*)CD_LEVEL_CART;
++
++    MARS_SYS_COMM2 = 0;                            /* OL-4: music off - no CD data */
++    cdCmd(54);                                     /*       reads while it plays */
++    splashBegin();                                 /* OL-3: splash + progress bar */
++    CD_STATE(0x4F00 | id);
++    int32 res = cdLoadToCart((uint16)(CD_FILE_LEVEL_BASE + id));
++    if (res < 0)
++    {
++        CD_STATE(0x4EE0 + (-res));
++        cdLoadFailed();
++    }
++
++    CacheClear();                                  /* master: forget the old level */
++    MARS_SYS_COMM4 = MARS_CMD_CACHE;               /* slave: the same */
++    MARS_WAIT();
++    MARS_SYS_COMM2 = (uint16)id;                   /* OL-6: the level's sound effects */
++    cdCmd(CD_CMD_SFX_LOAD);
++    CD_STATE(0x4E14);                              /* level ready */
++    gCartLevel = id;
++    splashEnd();                                   /* OL-3: screen cleared, game palette back */
++
++    return (const void*)CD_LEVEL_CART;
++}
++#else
+ const void* osLoadLevel(LevelID id)
+ {
+-    return (void*)LEVEL1_PKD; // TODO
++    switch (id)
++    {
++        case LVL_TR1_2: return (void*)LEVEL2_PKD;
++        default:        return (void*)LEVEL1_PKD;
++    }
+ }
++#endif
+ 
+ uint16 pageIndex = 0;
+ 
+@@ -150,6 +548,11 @@ extern "C" void secondary()
+             case MARS_CMD_FLUSH:
+                 flush_ot(1);
+                 break;
++#ifdef CD32X
++            case MARS_CMD_CACHE:            /* OL-2b: a new level is in the cart */
++                CacheClear();
++                break;
++#endif
+         }
+ 
+         MARS_SYS_COMM4 = 0;
+@@ -195,8 +598,21 @@ int main()
+ 
+     MARS_SYS_COMM4 = 0;
+ 
++#ifdef CD32X
++    /* on the console the Genesis layer (the loader's text) shows through the 32X picture */
++    MARS_SYS_COMM2 = CD32X_TEXT;                   /* text on: status codes visible if a load fails */
++    cdCmd(CD_CMD_TEXT_ONOFF);
++#endif
++
+     gameInit();
+ 
++#ifdef CD32X
++    CD_STATE(0x4B10);                              /* game loop running: Sub-CPU goes quiet */
++    gGameLoop = 1;                                 /* OL-2c */
++    MARS_SYS_COMM2 = 0;                            /* Genesis text off for the game */
++    cdCmd(CD_CMD_TEXT_ONOFF);
++#endif
++
+     int32 lastFrame = (gFrameIndex >> 1) - 1;
+     int32 fpsCounter = 0;
+     int32 fpsFrame = gFrameIndex;
+diff --git a/src/platform/32x/sound.cpp b/src/platform/32x/sound.cpp
+index 2512df5..8358b6f 100644
+--- a/src/platform/32x/sound.cpp
++++ b/src/platform/32x/sound.cpp
+@@ -1,5 +1,116 @@
+ #include "common.h"
+ 
++#ifdef CD32X
++/* ---------------------------------------------------------------------------------------
++ * OL-4: CD audio (CDDA) on the Sega CD.  The engine asks for the ORIGINAL game's track
++ * numbers; the disc is laid out so that disc track N = game track N (tools/make_music_tracks.py,
++ * music_map.txt - numbers without music are 2 s of silence).  The Sub-CPU plays them:
++ *   CMD 45, COMM2 = track         -> BIOS MSCPLAYR (repeat)  - title music and ambience
++ *   CMD 45, COMM2 = track | 0x8000 -> BIOS MSCPLAY1 (once)    - every other cue
++ *   CMD 54                         -> BIOS MSCSTOP
++ * Rule: no CD data reads while music plays - osLoadLevel() stops the music first.
++ * --------------------------------------------------------------------------------------- */
++#include "32x.h"
++
++#define SND_CMD_PLAY        45
++#define SND_CMD_STOP        54
++#define SND_TRACK_FIRST     2
++#define SND_TRACK_LAST      80      /* OL-11: 60 + level = the level's own music */
++#define SND_COMM14          (*(volatile uint16 *)0x2000402E)   /* Sub-CPU: drive status nibble */
++
++static void sndCmd(uint16 cmd)
++{
++    MARS_SYS_COMM0 = cmd;
++    for (int32 n = 0; n < 2000000 && MARS_SYS_COMM0 != 0; n++)
++        for (volatile int32 k = 0; k < 64; k++) {}
++}
++
++static bool sndLoops(int32 track)
++{
++    return (track >= 2 && track <= 5) || (track >= 57);   /* title, ambience, level music */
++}
++
++void sndInit() {}
++void sndInitSamples() {}
++void sndFreeSamples() {}
++/* OL-6: one sound effect per frame goes to the Sub-CPU with the pad request (the loudest);
++   the number is the engine's sample index + 1, the Sub-CPU maps it to the level's PCM pack */
++static int32 sndPending = 0;
++static int32 sndPendingVol = 0;
++
++void* sndPlaySample(int32 index, int32 volume, int32 pitch, int32 mode)
++{
++    if (index < 0 || index > 253)
++        return NULL;
++    if (!sndPending || volume > sndPendingVol)
++    {
++        sndPending = index + 1;
++        sndPendingVol = volume;
++    }
++    return NULL;
++}
++
++int32 sndTakePending()
++{
++    int32 p = sndPending;
++    sndPending = 0;
++    return p;
++}
++
++/* OL-10: what the SH2 started (the engine asks "still playing?" every frame) */
++static int32 sndTrack = 0;          /* 0 = none */
++static int32 sndGrace = 0;          /* frames a play-once cue counts as playing regardless */
++
++void sndPlayTrack(int32 track)
++{
++    /* OL-11/12: any ambience request - including "none" (-1) - plays the level's own music
++       (disc track 60 + level); trigger cues 6-56 have no album music (except 13, the secret
++       chime) and are ignored, so the level music is not interrupted */
++    if (track < 2 || track == 5 || (track >= 57 && track <= 59))
++    {
++        if (int32(gLevelID) < 0 || int32(gLevelID) > 20)
++            return;
++        track = 60 + int32(gLevelID);
++    }
++    else if (track >= 6 && track <= 56 && track != 13)
++        return;
++    if (track < SND_TRACK_FIRST || track > SND_TRACK_LAST)
++        return;
++    MARS_SYS_COMM2 = (uint16)(track | (sndLoops(track) ? 0 : 0x8000));
++    sndCmd(SND_CMD_PLAY);
++    sndTrack = track;
++    sndGrace = 180;                 /* ~3 s: the drive seeks before it reports "playing" */
++}
++
++void sndStopTrack()
++{
++    /* OL-12: music triggers that say "stop" are ignored - the level music keeps playing.
++       (A level load stops the music itself, before it reads the disc.) */
++}
++
++bool sndTrackIsPlaying()
++{
++    if (!sndTrack)
++        return false;
++    if (sndLoops(sndTrack))         /* looping music plays until it is stopped */
++        return true;
++    if (sndGrace > 0) {
++        sndGrace--;
++        return true;
++    }
++    int32 st = (SND_COMM14 >> 12) & 0x0F;   /* drive: 1 playing, 2 seeking, 3 scanning */
++    if (st == 1 || st == 2 || st == 3)
++        return true;
++    sndTrack = 0;                   /* the cue has ended - the engine restarts the level music */
++    return false;
++}
++
++void sndStopSample(int32 index) {}
++void sndStop() {}   /* OL-8: effects only - the CD music keeps playing */
++void sndFill(uint8* buffer, int32 count) {}
++
++#else
++
+ void sndInit()
+ {
+     // TODO
+@@ -49,3 +160,5 @@ void sndFill(uint8* buffer, int32 count)
+ {
+     // TODO
+ }
++
++#endif
