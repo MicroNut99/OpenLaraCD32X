@@ -1,6 +1,6 @@
 # Tomb Raider for Sega CD + 32X (OpenLara CD32X)
 
-Tomb Raider (1996) on the **Sega CD32X**, built on XProger's **OpenLara** 32X engine.
+Tomb Raider (1996) on the **Sega CD32X**, built on XProger's **OpenLara** 32X engine. **Version 1.1.**
 The whole game runs from one CD: each level is loaded from the disc into a 4 MB RAM cart, with
 CD music, PCM sound effects and saving.
 
@@ -153,6 +153,14 @@ only take effect in the CD build (`make CD32X=1`); the cartridge build is unchan
 Preparing the scene (9–34 ms) still runs on the main SH2 while the second SH2 waits. Letting
 the second SH2 draw one frame while the main SH2 prepares the next would need the scene lists
 twice (about 72 KB); only about 30 KB of the 32X's fast RAM is free, so it doesn't fit as is.
+
+## Versions
+The version is in the file `VERSION` and is shown small in the corner of the loading picture.
+
+| Version | What changed |
+|---|---|
+| 1.0 | The whole game from CD: all levels, CD music, PCM sound effects, saving in the RAM cart, all enemies, full passport, loading screen. |
+| 1.1 | Faster: the two SH2s draw separate halves of the screen, game logic runs while the second SH2 is still drawing, and the next frame is prepared without waiting for the screen refresh (fights 7–8 → 9–10 fps, exploring 9–15 fps). Profiler build (`PROF=1`). Version shown on the loading picture. |
 
 ## Credits
 - **OpenLara** – XProger and contributors: https://github.com/XProger/OpenLara
