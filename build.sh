@@ -16,7 +16,7 @@ fi
 
 echo "==> splash";    python3 "$HERE/tools/make_ol_splash.py" "$HERE/splash.jpg" "$ENGINE/data/SPLASH.BIN"
 python3 "$HERE/tools/make_boot_image.py" "$ENGINE/data/SPLASH.BIN" "$HERE/subcpu/ROMS/IMAGE.RAW"
-echo "==> engine";      cd "$ENGINE" && rm -rf build && make CD32X=1
+echo "==> engine";      cd "$ENGINE" && rm -rf build && make CD32X=1 ${PROF:+PROF=1}
 echo "==> ROM prep";    python3 "$HERE/tools/prep_openlara_cd.py" "$ENGINE/OpenLara.32x" "$HERE/subcpu/ROMS/OPENLARA.32X"
 echo "==> levels";      N=$(ls "$HERE"/gba/packer/out32x/*.PKD 2>/dev/null | wc -l); [ "$N" -ge 21 ] || { echo "*** only $N levels in gba/packer/out32x (21 expected) - stopping"; exit 1; }; cp "$HERE"/gba/packer/out32x/*.PKD "$HERE/subcpu/ROMS/"
 echo "==> sound packs"; rm -f "$HERE"/subcpu/ROMS/SFX*.BIN; python3 "$HERE/tools/make_sfx_packs.py" "$HERE/gba/packer/out32x" "$HERE/subcpu/ROMS"
