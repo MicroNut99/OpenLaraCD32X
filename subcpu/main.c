@@ -173,6 +173,13 @@ static const char *const ol_level_files[] = {
     "LEVEL10C.PKD"
 };
 #define OL_LEVEL_COUNT  ((int)(sizeof(ol_level_files) / sizeof(ol_level_files[0])))
+/* FMV-1: the movies, file 300 + movie (the game's order) -> the level slot (2 MB) */
+#define OL_FMV_BASE     300
+static const char *const ol_fmv_files[] = {
+    "CORE.ROQ",    "MANSION.ROQ", "CAFE.ROQ",    "SNOW.ROQ",    "LIFT.ROQ",    "VISION.ROQ",
+    "CANYON.ROQ",  "PYRAMID.ROQ", "PRISON.ROQ",  "ESCAPE.ROQ",  "END.ROQ"
+};
+#define OL_FMV_COUNT    ((int)(sizeof(ol_fmv_files) / sizeof(ol_fmv_files[0])))
 static int g_nexc = 0;                   
 
 #define XB(off)   (0x0C0100 + (off))       
@@ -655,6 +662,10 @@ int main(void)
                 /* CAVES-1: Caves (the title menu) stays in its own place, cart 0x080000 */
                 strcpy(img_name, ol_level_files[img_idx - OL_CAVES_BASE]);
                 cur_img = OL_CAVES_SLOT;
+            }
+            else if (img_idx >= OL_FMV_BASE && img_idx < OL_FMV_BASE + OL_FMV_COUNT) {
+                strcpy(img_name, ol_fmv_files[img_idx - OL_FMV_BASE]);   /* FMV-1 */
+                cur_img = OL_LEVEL_SLOT;
             }
             else if (img_idx <= 0) strcpy(img_name, "IMAGE.RAW");
             else sprintf(img_name, "IMAGE%d.RAW", img_idx);

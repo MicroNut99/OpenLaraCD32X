@@ -9,7 +9,7 @@
 #   3            the inventory/passport plays this one
 #   13           secret found
 #   5, 57-59     level ambience (Caves, Cistern, wind, Pyramid) - not on the album
-#   22-25        cut-scene dialogue - not on the album
+#   22-25        cut-scene sound (voices) - not on the album: from the game CD, see below
 #   6-21         music cues the levels trigger - fill in as you like (see the album list)
 02  00_01
 03  00_01
@@ -35,3 +35,10 @@
 76  00_24    # Natla's Mines
 78  00_22    # Atlantis
 80  00_04    # The Great Pyramid
+
+# v1.3: the cut-scenes' sound (voices + music) from the original game CD -
+# tools/nrg_cut_audio.py copies it into soundtrack_wav/ (see README)
+22  cut22    # Atlantis cut-scene
+23  cut23    # Qualopec cut-scene
+24  cut24    # Natla's Mines cut-scene
+25  cut25    # Tihocan cut-scene

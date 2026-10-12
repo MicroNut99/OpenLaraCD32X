@@ -1,3 +1,68 @@
+diff --git a/src/fixed/camera.h b/src/fixed/camera.h
+index fc4b271..5381409 100644
+--- a/src/fixed/camera.h
++++ b/src/fixed/camera.h
+@@ -3,6 +3,10 @@
+ 
+ #include "common.h"
+ 
++#ifdef CD32X
++bool gCutToTitle = false;   // PASSPORT-1: cut-scene picked in the passport -> back to the title
++#endif
++
+ #define CAM_SPEED               (1 << 3)
+ #define CAM_ROT_SPEED           (1 << 9)
+ #define CAM_DIST_FOLLOW         1536
+@@ -15,6 +19,9 @@
+ 
+ void Camera::initCinematic()
+ {
++#ifdef CD32X
++    gCinematicCamera.timer = 0;     // PASSPORT-2: start at the first camera frame
++#endif
+     switch (gLevelID)
+     {
+         case LVL_TR1_CUT_1:
+@@ -72,6 +79,16 @@ void Camera::updateCinematic()
+ 
+     if (timer >= level.cameraFramesCount) {
+         timer = level.cameraFramesCount - 1;
++    #ifdef CD32X
++        extern LevelID gNextLevel;      // PASSPORT-3: game.h
++        if (gNextLevel != LVL_MAX) {
++            // already decided by an earlier update in this frame - keep it
++        } else
++        if (gCutToTitle) {              // PASSPORT-1: watched from the passport
++            gCutToTitle = false;
++            nextLevel(LVL_TR1_TITLE);
++        } else
++    #endif
+         nextLevel(LevelID(gLevelID + 1));
+     }
+ }
+diff --git a/src/fixed/common.h b/src/fixed/common.h
+index a7d39f1..747e231 100644
+--- a/src/fixed/common.h
++++ b/src/fixed/common.h
+@@ -2479,6 +2479,18 @@ enum StringID {
+     , STR_TR3_CITY
+     , STR_TR3_CHAMBER
+     , STR_TR3_STPAUL
++#ifdef CD32X
++// PASSPORT-1: the cut-scenes in the passport
++    , STR_CD32X_CUT1
++    , STR_CD32X_CUT2
++    , STR_CD32X_CUT3
++    , STR_CD32X_CUT4
++// FMV-1: the movies in the passport
++    , STR_CD32X_FMV_CORE
++    , STR_CD32X_FMV_MANSION
++    , STR_CD32X_FMV_PYRAMID
++    , STR_CD32X_FMV_ESCAPE
++#endif
+ 
+     , STR_MAX
+ };
 diff --git a/src/fixed/enemy.h b/src/fixed/enemy.h
 index 4325cac..b99c4e9 100644
 --- a/src/fixed/enemy.h
@@ -1939,10 +2004,36 @@ index 4325cac..b99c4e9 100644
  };
  
 diff --git a/src/fixed/inventory.h b/src/fixed/inventory.h
-index 4689809..79e38bb 100644
+index 4689809..592eb8f 100644
 --- a/src/fixed/inventory.h
 +++ b/src/fixed/inventory.h
-@@ -1247,8 +1247,32 @@ struct Inventory
+@@ -870,9 +870,25 @@ struct Inventory
+ 
+             if (passportPage == PASSPORT_PAGE_LOAD_GAME)
+             {
++            #ifdef CD32X
++                #define CD32X_MOVIE_BASE 1000   /* FMV-1: option value 1000 + movie */
++                if (opt.value >= CD32X_MOVIE_BASE)
++                {
++                    extern bool osPlayVideo(int32 n);   /* main.cpp / fmv.inc */
++                    osPlayVideo(opt.value - CD32X_MOVIE_BASE);  /* then back to this page */
++                }
++                else
++                {
++                extern bool gCutToTitle;    /* PASSPORT-1: a cut-scene from here -> title after */
++                gCutToTitle = (opt.value == LVL_TR1_CUT_1) || (opt.value == LVL_TR1_CUT_2) ||
++                              (opt.value == LVL_TR1_CUT_3) || (opt.value == LVL_TR1_CUT_4);
++            #endif
+                 nextLevel(LevelID(opt.value));
+                 frameTarget = 0;
+                 nextState = INV_STATE_CLOSE;
++            #ifdef CD32X
++                }
++            #endif
+             }
+             
+             if (passportPage == PASSPORT_PAGE_SAVE_GAME)
+@@ -1247,8 +1263,47 @@ struct Inventory
              {
                  if (passportPage == PASSPORT_PAGE_LOAD_GAME)
                  {
@@ -1968,6 +2059,21 @@ index 4689809..79e38bb 100644
 +                    for (int32 i = 0; i < int32(sizeof(passportLevels) / sizeof(passportLevels[0])); i++) {
 +                        OPTION_BTN(passportLevels[i].str, passportLevels[i].id);
 +                    }
++                    /* PASSPORT-1: the cut-scenes (in-engine scenes, CUT1-4.PKD on the disc) */
++                    OPTION_SPACE();
++                    OPTION_BTN(STR_CD32X_CUT1, LVL_TR1_CUT_1);
++                    OPTION_BTN(STR_CD32X_CUT2, LVL_TR1_CUT_2);
++                    OPTION_BTN(STR_CD32X_CUT3, LVL_TR1_CUT_3);
++                    OPTION_BTN(STR_CD32X_CUT4, LVL_TR1_CUT_4);
++                    /* FMV-1: the movies - title menu only (the movie goes where the level is) */
++                    if (gLevelID == LVL_TR1_TITLE)
++                    {
++                        OPTION_SPACE();
++                        OPTION_BTN(STR_CD32X_FMV_CORE, CD32X_MOVIE_BASE + 0);
++                        OPTION_BTN(STR_CD32X_FMV_MANSION, CD32X_MOVIE_BASE + 1);
++                        OPTION_BTN(STR_CD32X_FMV_PYRAMID, CD32X_MOVIE_BASE + 7);
++                        OPTION_BTN(STR_CD32X_FMV_ESCAPE, CD32X_MOVIE_BASE + 9);
++                    }
 +                #else
                      OPTION_BTN(STR_TR1_LEVEL1, LVL_TR1_1);
                      OPTION_BTN(STR_TR1_LEVEL2, LVL_TR1_2);
@@ -1975,7 +2081,7 @@ index 4689809..79e38bb 100644
                      if (osCheckSave())
                      {
                          OPTION_SPACE();
-@@ -1306,6 +1330,19 @@ struct Inventory
+@@ -1306,6 +1361,19 @@ struct Inventory
  
          int32 w = optionsWidth;
          int32 h = optionsHeight;
@@ -1995,7 +2101,7 @@ index 4689809..79e38bb 100644
          int32 y = (FRAME_HEIGHT - h) / 2 - 12;
  
          renderFill((FRAME_WIDTH - w) / 2 + 1, y + 1, w - 2, h - 2, 25, 2);
-@@ -1315,7 +1352,7 @@ struct Inventory
+@@ -1315,7 +1383,7 @@ struct Inventory
          h = 18;
          y += 2;
  
@@ -2017,6 +2123,30 @@ index 3a104dd..fddfd82 100644
      return NULL;
  #endif
  
+diff --git a/src/fixed/lang/en.h b/src/fixed/lang/en.h
+index e9eeb6d..cf2001e 100644
+--- a/src/fixed/lang/en.h
++++ b/src/fixed/lang/en.h
+@@ -389,6 +389,18 @@ const char* const STR_EN[STR_MAX] = { ""
+     , "Lost City Of Tinnos"
+     , "Meteorite Cavern"
+     , "All Hallows"
++#ifdef CD32X
++// PASSPORT-1: the cut-scenes in the passport (each plays after the level it is named after)
++    , "Cutscene Qualopec"           // PASSPORT-2: names reversed
++    , "Cutscene Tihocan"
++    , "Cutscene Natla's Mines"
++    , "Cutscene Atlantis"
++// FMV-1: the movies in the passport (named after their files)
++    , "Movie Core"
++    , "Movie Mansion"
++    , "Movie Pyramid"
++    , "Movie Escape"
++#endif
+ };
+ 
+ #endif
+\ No newline at end of file
 diff --git a/src/fixed/lara.h b/src/fixed/lara.h
 index 846ca62..0d185f2 100644
 --- a/src/fixed/lara.h
@@ -2121,7 +2251,7 @@ index dcd12ee..0306ed8 100644
 +#endif
 +        .align  4
 diff --git a/src/platform/32x/main.cpp b/src/platform/32x/main.cpp
-index 42f1f7e..a894ddb 100644
+index 42f1f7e..f273fac 100644
 --- a/src/platform/32x/main.cpp
 +++ b/src/platform/32x/main.cpp
 @@ -1,10 +1,212 @@
@@ -2826,7 +2956,7 @@ index 42f1f7e..a894ddb 100644
 +    splashEnd();                                   /* OL-3: screen cleared, game palette back */
 +
 +    return (const void*)CD_LEVEL_CART;
-+}
+ }
 +#else
 +const void* osLoadLevel(LevelID id)
 +{
@@ -2835,12 +2965,23 @@ index 42f1f7e..a894ddb 100644
 +        case LVL_TR1_2: return (void*)LEVEL2_PKD;
 +        default:        return (void*)LEVEL1_PKD;
 +    }
- }
++}
 +#endif
  
  uint16 pageIndex = 0;
  
-@@ -145,11 +808,33 @@ extern "C" void secondary()
+@@ -112,6 +775,10 @@ void pageClear()
+     dmaFill((uint8*)&MARS_FRAMEBUFFER + 0x200, 0, FRAME_WIDTH * FRAME_HEIGHT);
+ }
+ 
++#ifdef CD32X
++#include "fmv.inc"                  /* FMV-1: the movie player (osPlayVideo, fmvAudio) */
++#endif
++
+ extern "C" void pri_vbi_handler()
+ {
+     gFrameIndex++;
+@@ -145,11 +812,39 @@ extern "C" void secondary()
          switch (cmd)
          {            
              case MARS_CMD_CLEAR:
@@ -2865,16 +3006,22 @@ index 42f1f7e..a894ddb 100644
 +            #else
                  flush_ot(1);
 +            #endif
-+                break;
+                 break;
 +#ifdef CD32X
 +            case MARS_CMD_CACHE:            /* OL-2b: a new level is in the cart */
 +                CacheClear();
-                 break;
++                break;
++            case MARS_CMD_FMV_AUDIO:        /* FMV-1: a movie's sound, until the master stops it */
++                fmvAudio();
++                break;
++            case MARS_CMD_FMV_PWM:          /* FMV-1: PWM on (while a movie loads) */
++                fmvPwmOn();
++                break;
 +#endif
          }
  
          MARS_SYS_COMM4 = 0;
-@@ -195,10 +880,27 @@ int main()
+@@ -195,10 +890,27 @@ int main()
  
      MARS_SYS_COMM4 = 0;
  
@@ -2902,7 +3049,7 @@ index 42f1f7e..a894ddb 100644
      int32 fpsFrame = gFrameIndex;
      int32 vsyncRate = (MARS_VDP_DISPMODE & MARS_NTSC_FORMAT) ? 60 : 50;
  
-@@ -211,6 +913,9 @@ int main()
+@@ -211,6 +923,9 @@ int main()
              fpsFrame += vsyncRate;
              fps = fpsCounter;
              fpsCounter = 0;
@@ -2912,7 +3059,7 @@ index 42f1f7e..a894ddb 100644
          }
  
          if (vsyncRate == 50)
-@@ -227,6 +932,39 @@ int main()
+@@ -227,6 +942,39 @@ int main()
  
          lastFrame = frame;
  
@@ -2952,7 +3099,7 @@ index 42f1f7e..a894ddb 100644
          updateInput();
  
          gameUpdate(delta);
-@@ -236,6 +974,8 @@ int main()
+@@ -236,6 +984,8 @@ int main()
          gameRender();
  
          pageFlip();
@@ -2999,7 +3146,7 @@ index 4a89334..64f14af 100644
      uint8* ptr = (uint8*)pixel;
  
 diff --git a/src/platform/32x/render.cpp b/src/platform/32x/render.cpp
-index a0c5c88..1b06a10 100644
+index a0c5c88..73a38cb 100644
 --- a/src/platform/32x/render.cpp
 +++ b/src/platform/32x/render.cpp
 @@ -46,6 +46,70 @@ enum FaceType {
@@ -3265,11 +3412,11 @@ index a0c5c88..1b06a10 100644
      CacheClear();
  }
 +#endif // CD32X_SPLIT
-+
+ 
 +#ifdef CD32X_SPLIT
 +// SPLIT-2: the master's watchdog timer (main() runs it): 178 us per tick
 +extern "C" volatile uint32 mars_pwdt_ovf_count;
- 
++
 +static uint32 splitTicks()
 +{
 +    uint32 o1, o2;
@@ -3457,7 +3604,51 @@ index a0c5c88..1b06a10 100644
  
  void renderInit()
  {
-@@ -899,6 +1293,108 @@ extern "C" X_NOINLINE void drawPoly(uint32 flags, VertexLink* v, const ColorInde
+@@ -788,6 +1182,43 @@ void renderLevelFree()
+ {
+ }
+ 
++#ifdef CD32X
++// FMV-1: the movie player (fmv.inc) borrows the face and vertex lists while a movie plays -
++// 70 KB of SDRAM nothing else uses then.  Only if the two lie back to back in memory (one
++// block, as the linker puts them now: both 16-byte aligned, sizes multiples of 16); otherwise
++// NULL = no movie.  FMV-1b: not the ordering table - 12 bytes of padding follow it, so the
++// old three-list check always failed (and the table must stay 0 anyway).
++void* renderScratch(int32* size)
++{
++    // FMV-1c: as plain numbers, hidden from the optimizer - comparing the arrays' addresses
++    // directly let GCC "know" that two different arrays never touch: always NULL
++    uint32 f = (uint32)gFaces;
++    uint32 v = (uint32)gVertices;
++    __asm__ volatile ("" : "+r"(f), "+r"(v));
++    uint8* a;
++    if (f + sizeof(gFaces) == v)
++        a = (uint8*)f;
++    else if (v + sizeof(gVertices) == f)
++        a = (uint8*)v;
++    else {
++        *size = 0;
++        return NULL;
++    }
++    if ((uint32)a & 15) {                       // the picture copy needs 16-byte alignment
++        *size = 0;
++        return NULL;
++    }
++    *size = int32(sizeof(gFaces) + sizeof(gVertices));
++    return a;
++}
++
++void renderScratchDone()                        // given back: the lists are rebuilt every frame
++{
++    gVerticesBase = gVertices;
++    gFacesBase = gFaces;
++}
++#endif
++
+ extern "C" X_INLINE void drawTriangle(uint32 flags, VertexLink* v, const ColorIndex* tile)
+ {
+     VertexLink* top = v;
+@@ -899,6 +1330,108 @@ extern "C" X_NOINLINE void drawPoly(uint32 flags, VertexLink* v, const ColorInde
      rasterize(flags, top, tile);
  }
  
@@ -3567,10 +3758,10 @@ index a0c5c88..1b06a10 100644
  {
      if (room->info->quadsCount > 0) {
 diff --git a/src/platform/32x/sound.cpp b/src/platform/32x/sound.cpp
-index 2512df5..2ba1fcb 100644
+index 2512df5..e6cf0ce 100644
 --- a/src/platform/32x/sound.cpp
 +++ b/src/platform/32x/sound.cpp
-@@ -1,5 +1,123 @@
+@@ -1,5 +1,157 @@
  #include "common.h"
  
 +#ifdef CD32X
@@ -3639,10 +3830,37 @@ index 2512df5..2ba1fcb 100644
 +
 +/* OL-10: what the SH2 started (the engine asks "still playing?" every frame) */
 +static int32 sndTrack = 0;          /* 0 = none */
++static int32 sndCutLevel = -1;      /* CUTAUDIO-1: the cut-scene whose sound has started */
 +static int32 sndGrace = 0;          /* frames a play-once cue counts as playing regardless */
 +
 +void sndPlayTrack(int32 track)
 +{
++    /* CUTAUDIO-1: a cut-scene's sound (game tracks 22-25, voices + music from the game CD) -
++       once per visit: when it has ended the engine asks again, then nothing more plays.
++       PASSPORT-3: in a cut-scene level ANY request means its own track (the level table has
++       none for them); anywhere else 22-25 are ignored (rule below: cues 6-56) */
++    int32 cut = 0;
++    switch (gLevelID)
++    {
++        case LVL_TR1_CUT_1: cut = TRACK_TR1_CUT_1; break;     /* 23 Qualopec      */
++        case LVL_TR1_CUT_2: cut = TRACK_TR1_CUT_2; break;     /* 25 Tihocan       */
++        case LVL_TR1_CUT_3: cut = TRACK_TR1_CUT_3; break;     /* 24 Natla's Mines */
++        case LVL_TR1_CUT_4: cut = TRACK_TR1_CUT_4; break;     /* 22 Atlantis      */
++        default: break;
++    }
++    if (cut)
++    {
++        track = cut;
++        if (sndCutLevel == int32(gLevelID))
++            return;
++        sndCutLevel = int32(gLevelID);
++        MARS_SYS_COMM2 = (uint16)(track | 0x8000);
++        sndCmd(SND_CMD_PLAY);
++        sndTrack = track;
++        sndGrace = 180;
++        return;
++    }
++
 +    /* OL-11/12: any ambience request - including "none" (-1) - plays the level's own music
 +       (disc track 60 + level); trigger cues 6-56 have no album music (except 13, the secret
 +       chime) and are ignored, so the level music is not interrupted */
@@ -3660,6 +3878,12 @@ index 2512df5..2ba1fcb 100644
 +    sndCmd(SND_CMD_PLAY);
 +    sndTrack = track;
 +    sndGrace = 180;                 /* ~3 s: the drive seeks before it reports "playing" */
++}
++
++void sndForgetTrack()               /* FMV-1: a movie stopped the music - the engine restarts it */
++{
++    sndTrack = 0;
++    sndGrace = 0;
 +}
 +
 +void sndStopTrack()
@@ -3686,7 +3910,8 @@ index 2512df5..2ba1fcb 100644
 +}
 +
 +void sndStopSample(int32 index) {}
-+void sndStop() {}   /* OL-8: effects only - the CD music keeps playing */
++void sndStop() { sndCutLevel = -1; }   /* OL-8: effects only - the CD music keeps playing;
++                                           CUTAUDIO-1: a level starts - its sound may play */
 +void sndFill(uint8* buffer, int32 count) {}
 +
 +#else
@@ -3694,9 +3919,1160 @@ index 2512df5..2ba1fcb 100644
  void sndInit()
  {
      // TODO
-@@ -49,3 +167,5 @@ void sndFill(uint8* buffer, int32 count)
+@@ -49,3 +201,5 @@ void sndFill(uint8* buffer, int32 count)
  {
      // TODO
  }
 +
 +#endif
+diff --git a/src/platform/32x/fmv.inc b/src/platform/32x/fmv.inc
+new file mode 100755
+index 0000000..390bc66
+--- /dev/null
++++ b/src/platform/32x/fmv.inc
+@@ -0,0 +1,411 @@
++/* ---------------------------------------------------------------------------------------
++ * FMV-1: the original game's movies (RoQ video + DPCM sound), played from the passport.
++ *   Included by main.cpp (CD32X build only).  The movies were converted from the PC game's
++ *   .RPL files with ffmpeg (tools: see README): 288 x 112, 15 frames/s, 22050 Hz mono.
++ *
++ *   1. The .ROQ file is loaded from the CD into the cart's level slot (2 MB), exactly like a
++ *      level (CMD 38 file 300 + movie, CMD 46 chunks, splash + red bar).  Only files up to
++ *      0x1F0000 bytes fit before the save area - bigger ones are refused (FMV-2: streaming).
++ *      The level slot then holds the movie, so the next level load reads its level again.
++ *   2. The MASTER decodes the pictures straight from the cart with the RoQ decoder of
++ *      Victor Luchits' Doom 32X: Resurrection (roq_read.c, MIT; decoder by Tim Ferguson).
++ *      It draws in the 32X's 32768-colour mode, straight into the frame buffer; the previous
++ *      picture is kept in SDRAM (canvascopy, 68 KB) - borrowed from the 3D renderer's
++ *      vertex and face lists (renderScratch, render.cpp - FMV-1b), which are not used
++ *      while a movie plays.  Every line is shown twice (288 x 224 on screen).
++ *   3. The SLAVE plays the sound: it walks the same file in the cart, decodes the sound
++ *      chunks (DPCM) into 316-sample blocks and feeds them to the 32X PWM with its DMA
++ *      channel 1, paced by the PWM's own requests (DREQ).  The slave runs with interrupts
++ *      masked, so it polls the end of each block (TE) instead of a DMA interrupt.
++ *      The PWM is turned on (ramped to the middle) while the movie loads - no click.
++ *   4. A, B, C or START (after the first few frames) stops the movie.  Afterwards: 256-colour
++ *      mode, the game's line tables, palette and music come back.
++ * --------------------------------------------------------------------------------------- */
++#include "roq.h"
++
++#define FMV_FILE_BASE       300                 /* subcpu/main.c: 300 + movie -> slot 16 */
++#define FMV_MAX_LEN         0x1F0000            /* the level slot, up to the save area   */
++#define MARS_CMD_FMV_AUDIO  0x7A5C              /* slave command: play the movie's sound */
++#define MARS_CMD_FMV_PWM    0x7A5D              /* slave command: PWM on, slowly to the middle */
++#define FMV_CENTER          (2 + (32768 >> 6))  /* PWM value of silence */
++#define FMV_VOLUME          7                   /* FMV-1d: 16 = full, 8 = half (-6 dB); 7 tested on hardware */
++#define FMV_PWM(v)          (FMV_CENTER + ((((v) - 32768) * FMV_VOLUME) >> 10))   /* 0..65535 -> PWM */
++#define FMV_SAMPLES         316                 /* one PWM block (about 70 per second)   */
++#define FMV_SHARED(v)       (*(volatile int32 *)((uint32)&(v) | 0x20000000))   /* cache-through */
++
++void sndForgetTrack();                          /* FMV-1: sound.cpp - restart the music     */
++void* renderScratch(int32* size);               /* FMV-1: render.cpp - the borrowed lists   */
++void renderScratchDone();                       /*        ... given back (ordering table 0) */
++
++static int32 gFmvLen = 0;                       /* the movie's length, for the slave        */
++static int32 gFmvStop = 0;                      /* master -> slave: stop the sound          */
++static uint16 gFmvSnd[2][FMV_SAMPLES] __attribute__((aligned(16)));
++
++/* ----------------------------------------------------------------------------- the slave */
++struct FmvAudio
++{
++    const uint8* p;                             /* next chunk header in the cart */
++    const uint8* end;
++    int32 rem;                                  /* samples left in the current sound chunk */
++    int32 val;                                  /* DPCM predictor 0..65535 */
++};
++
++static void fmvAudioFill(FmvAudio &a, uint16* dst)  /* one block of PWM samples */
++{
++    int32 i = 0;
++    while (i < FMV_SAMPLES)
++    {
++        if (a.rem <= 0)                         /* the next sound chunk */
++        {
++            while (a.p + 8 <= a.end)
++            {
++                const uint8* h = a.p;
++                uint32 id = h[0] | (h[1] << 8);
++                uint32 size = h[2] | (h[3] << 8) | (h[4] << 16) | ((uint32)h[5] << 24);
++                if (size > (uint32)(a.end - h - 8))
++                {
++                    a.p = a.end;                /* broken chunk: the end */
++                    break;
++                }
++                a.p = h + 8;
++                if (id == RoQ_SOUND_MONO)
++                {
++                    a.val = (int32)(int16)(h[6] | (h[7] << 8)) + 32768;
++                    a.rem = (int32)size;
++                    break;
++                }
++                a.p += size;                    /* a picture chunk: not ours */
++            }
++            if (a.rem <= 0)                     /* no sound left: hold the last value */
++            {
++                uint16 last = (uint16)FMV_PWM(a.val);
++                for (; i < FMV_SAMPLES; i++)
++                    dst[i] = last;
++                return;
++            }
++        }
++
++        int32 n = a.rem;
++        if (n > FMV_SAMPLES - i)
++            n = FMV_SAMPLES - i;
++        const uint8* b = a.p;
++        int32 v = a.val;
++        for (int32 j = 0; j < n; j++)
++        {
++            int32 c = b[j];
++            int32 d = (c & 127) * (c & 127);    /* the RoQ DPCM step: the square, signed */
++            v += (c & 128) ? -d : d;
++            if (v > 65535) v = 65535;
++            else if (v < 0) v = 0;
++            dst[i + j] = (uint16)FMV_PWM(v);
++        }
++        a.val = v;
++        a.p = b + n;
++        a.rem -= n;
++        i += n;
++    }
++}
++
++static void fmvAudioStart(uint16* buf)          /* slave DMA 1 -> PWM mono, on PWM requests */
++{
++    SH2_DMA_CHCR1 = 0;
++    SH2_DMA_SAR1 = (uint32)buf;
++    SH2_DMA_DAR1 = (uint32)&MARS_PWM_MONO;
++    SH2_DMA_TCR1 = FMV_SAMPLES;
++    SH2_DMA_CHCR1 = 0x14e1;                     /* dest fixed, src +, word, DREQ, no interrupt */
++}
++
++static void fmvPwmRamp(int32 from, int32 to, int32 each)   /* slave: no click on a real 32X */
++{
++    int32 step = (from < to) ? 1 : -1;
++    for (int32 v = from; v != to; v += step)
++        for (int32 i = 0; i < each; i++)
++        {
++            while (MARS_PWM_MONO & 0x8000) {}   /* FIFO full: wait */
++            MARS_PWM_MONO = (uint16)v;
++        }
++}
++
++static void fmvPwmOn()                          /* slave: MARS_CMD_FMV_PWM, while the movie loads */
++{
++    if (MARS_VDP_DISPMODE & MARS_NTSC_FORMAT)
++        MARS_PWM_CYCLE = (((23011361 << 1) / RoQ_SAMPLE_RATE + 1) >> 1) + 1;
++    else
++        MARS_PWM_CYCLE = (((22801467 << 1) / RoQ_SAMPLE_RATE + 1) >> 1) + 1;
++    MARS_PWM_CTRL = 0x0185;                     /* L/R on, DREQ every PWM cycle (Vic's values) */
++    fmvPwmRamp(1, FMV_CENTER, 86);              /* about 2 s, like Vic's Mars_InitPWM */
++}
++
++static void fmvAudio()                          /* slave: MARS_CMD_FMV_AUDIO */
++{
++    CacheClear();                               /* the movie is new in the cart */
++
++    FmvAudio a;
++    a.p = (const uint8*)CD_LEVEL_CART + 8;      /* after the file header */
++    a.end = (const uint8*)CD_LEVEL_CART + FMV_SHARED(gFmvLen);
++    a.rem = 0;
++    a.val = 32768;
++
++    uint16* buf[2];
++    buf[0] = (uint16*)((uint32)gFmvSnd[0] | 0x20000000);   /* written cache-through */
++    buf[1] = (uint16*)((uint32)gFmvSnd[1] | 0x20000000);
++
++    fmvAudioFill(a, buf[0]);
++    fmvAudioFill(a, buf[1]);
++    fmvAudioStart(buf[0]);
++    int32 next = 1;
++
++    while (!FMV_SHARED(gFmvStop))
++    {
++        if (!(SH2_DMA_CHCR1 & 2))               /* TE: block not finished yet */
++        {
++            for (volatile int32 k = 0; k < 32; k++) {}   /* don't hammer the shared flag */
++            continue;
++        }
++        SH2_DMA_CHCR1;                          /* TE read, then cleared by the next start */
++        fmvAudioStart(buf[next]);
++        next ^= 1;
++        fmvAudioFill(a, buf[next]);
++    }
++
++    SH2_DMA_CHCR1 = 0;                          /* stop, then slowly down to 0 (no click) */
++    int32 last = FMV_PWM(a.val);
++    if (last > FMV_CENTER * 2) last = FMV_CENTER * 2;
++    fmvPwmRamp(last, 1, 4);
++}
++
++/* ---------------------------------------------------------------------------- the master */
++static const uint8* gFmvPos;                    /* the next chunk in the cart */
++static const uint8* gFmvEnd;
++
++static void fmvGetChunk(roq_file* fp)           /* the decoder's next picture chunk */
++{
++    if (fp->bof)                                /* the 8-byte file header */
++    {
++        fp->data = (unsigned char*)gFmvPos;
++        fp->page_base = fp->data;
++        fp->page_end = fp->data + 8;
++        return;
++    }
++    while (gFmvPos + 8 <= gFmvEnd)
++    {
++        const uint8* h = gFmvPos;
++        uint32 id = h[0] | (h[1] << 8);
++        uint32 size = h[2] | (h[3] << 8) | (h[4] << 16) | ((uint32)h[5] << 24);
++        if (size > (uint32)(gFmvEnd - h - 8))
++            break;
++        if (id == RoQ_SOUND_MONO || id == RoQ_SOUND_STEREO)
++        {
++            gFmvPos = h + 8 + size;             /* the slave plays these */
++            continue;
++        }
++        fp->data = (unsigned char*)h;
++        fp->page_base = fp->data;
++        fp->page_end = fp->data + 8 + size;
++        return;
++    }
++    fp->eof = 1;                                /* the end of the movie */
++    fp->data = NULL;
++}
++
++static void fmvRetChunk(roq_file* fp)
++{
++    if (!fp->data)
++        return;
++    gFmvPos = fp->page_end;
++    fp->bof = 0;
++}
++
++static void fmvFinish()                         /* the decoder may draw: last picture shown */
++{
++    pageWait();
++}
++
++static void fmvWaitVBlank()
++{
++    while (MARS_VDP_FBCTL & MARS_VDP_VBLK) {}
++    while (!(MARS_VDP_FBCTL & MARS_VDP_VBLK)) {}
++}
++
++static void fmvLines(int32 pitch, int32 height) /* both pages: line tables + black */
++{
++    for (int32 page = 0; page < 2; page++)
++    {
++        volatile uint16* lines = &MARS_FRAMEBUFFER;
++        fast_memset((void*)((uint8*)&MARS_FRAMEBUFFER + 0x200), 0, (0x20000 - 0x200) >> 2);
++        for (int32 j = 0; j < 256; j++)
++        {
++            if (pitch && j < height * 2)
++                lines[j] = (uint16)((j >> 1) * pitch + 0x100);  /* every line twice */
++            else if (pitch)
++                lines[j] = (uint16)(height * pitch + 0x100);    /* a black line */
++            else
++                lines[j] = (uint16)(0x100 + ((j < FRAME_HEIGHT - 1) ? j : FRAME_HEIGHT - 1) * (FRAME_WIDTH / 2));
++        }
++        pageFlip();
++        pageWait();
++    }
++}
++
++static int32 fmvPad()
++{
++    MARS_SYS_COMM2 = 0;                         /* no sound effect */
++    cdCmd(CD_CMD_GET_PAD);
++    return MARS_SYS_COMM8;
++}
++
++static void fmvFail(uint16 colour)              /* FMV-1c: why a movie didn't play - 1 s flash */
++{
++    for (int32 i = 0; i < 256; i++)
++    {
++        while ((MARS_VDP_FBCTL & MARS_VDP_PEN) == 0) {}
++        (&MARS_CRAM)[i] = colour;
++    }
++    int32 t = *(volatile int32*)&gFrameIndex;
++    while (*(volatile int32*)&gFrameIndex - t < 60) {}
++    if (gGamePalette)
++        osSetPalette(gGamePalette);
++}
++#define FMV_RED     0x001F                      /* no memory */
++#define FMV_YELLOW  0x03FF                      /* not on the disc / too big */
++#define FMV_BLUE    0x7C00                      /* loading failed */
++#define FMV_MAGENTA 0x7C1F                      /* not a RoQ movie */
++
++/* plays movie n (0 CORE, 1 MANSION, 2 CAFE, 3 SNOW, 4 LIFT, 5 VISION, 6 CANYON, 7 PYRAMID,
++   8 PRISON, 9 ESCAPE, 10 END); false = not played (not on the disc / too big / no memory) */
++bool osPlayVideo(int32 n)
++{
++#ifdef CD32X_OVERLAP
++    renderFinish();                             /* the slave's last frame */
++#endif
++    MARS_WAIT();
++    pageWait();
++
++    /* memory first: nothing is loaded if the lists can't be borrowed */
++    int32 scratchSize = 0;
++    uint8* scratch = (uint8*)renderScratch(&scratchSize);
++    const int32 copyOfs = 3328;                 /* FMV-1b: ri 256 + codebooks 3072, then the copy */
++    if (!scratch || scratchSize < copyOfs + 304 * 112 * 2)
++    {
++        fmvFail(FMV_RED);
++        return false;
++    }
++
++    MARS_SYS_COMM2 = (uint16)(FMV_FILE_BASE + n);   /* the length, before anything moves */
++    cdCmd(CD_CMD_OPEN_FILE);
++    int32 len = (MARS_SYS_COMM0 == 0) ? (int32)CD_COMM8_32 : 0;
++    if (len <= 8 || len > FMV_MAX_LEN)
++    {
++        renderScratchDone();
++        fmvFail(FMV_YELLOW);
++        return false;
++    }
++
++    MARS_SYS_COMM2 = 0;                         /* music off - no CD data reads while it plays */
++    cdCmd(54);
++    sndForgetTrack();                           /* the engine restarts it afterwards */
++
++    splashBegin();
++    MARS_SYS_COMM4 = MARS_CMD_FMV_PWM;          /* the slave turns the PWM on meanwhile */
++    gCartLevel = -1;                            /* the level slot is the movie's now */
++    int32 res = cdLoadToCart((uint16)(FMV_FILE_BASE + n));
++    CacheClear();
++    MARS_WAIT();                                /* PWM ramp done */
++    MARS_SYS_COMM4 = MARS_CMD_CACHE;            /* slave: forget the old cart data too */
++    MARS_WAIT();
++    if (res <= 8)
++    {
++        splashEnd();
++        renderScratchDone();
++        fmvFail(FMV_BLUE);
++        return false;
++    }
++
++    /* the decoder's memory, in the borrowed lists */
++    memset(scratch, 0, copyOfs);
++    roq_info* ri = (roq_info*)scratch;
++    ri->cells_u = (roq_cell*)(scratch + 256);   /* 256 x 8 */
++    ri->qcells_u = (roq_qcell*)(scratch + 256 + 2048);   /* 256 x 4 */
++    ri->canvascopy = (short*)(scratch + copyOfs);
++
++    roq_file fp;
++    memset(&fp, 0, sizeof(fp));
++    fp.bof = 1;
++    gFmvPos = (const uint8*)CD_LEVEL_CART;
++    gFmvEnd = gFmvPos + res;
++
++    int32 displayRate = (MARS_VDP_DISPMODE & MARS_NTSC_FORMAT) ? 60 : 50;
++    roq_init(ri, &fp, fmvGetChunk, fmvRetChunk, displayRate, (short*)((uint8*)&MARS_FRAMEBUFFER + 0x200));
++
++    bool ok = (roq_read_info(&fp, ri) == 0) && ri->framerate > 0 && ri->width <= 304 &&
++              ri->canvas_pitch * ri->display_height * 2 <= scratchSize - copyOfs &&
++              ri->display_height * 2 <= FRAME_HEIGHT;
++    if (!ok)
++    {
++        splashEnd();
++        renderScratchDone();
++        fmvFail(FMV_MAGENTA);
++        return false;
++    }
++
++    /* 32768 colours, every line twice */
++    fmvWaitVBlank();
++    MARS_VDP_DISPMODE = MARS_224_LINES | MARS_VDP_MODE_OFF;
++    fmvLines(ri->canvas_pitch, ri->display_height);
++    fmvWaitVBlank();
++    MARS_VDP_DISPMODE = MARS_224_LINES | MARS_VDP_MODE_32K;
++
++    SH2_DMA_CHCR1 = 0;                          /* master DMA 1: the picture copy (decoder) */
++    SH2_DMA_DRCR1 = 0;
++    SH2_DMA_DMAOR = 1;
++
++    FMV_SHARED(gFmvLen) = res;
++    FMV_SHARED(gFmvStop) = 0;
++    bool audio = false;
++
++    int32 start = gFrameIndex;
++    int32 frames = 0;
++    int32 prev = 0xFFFF;                        /* buttons held when the movie starts don't count */
++    while (1)
++    {
++        int32 pad = fmvPad();
++        int32 hit = pad & ~prev;
++        prev = pad;
++        if (frames > 5 && (hit & (SEGA_CTRL_A | SEGA_CTRL_B | SEGA_CTRL_C | SEGA_CTRL_START)))
++            break;
++
++        CacheClear();                           /* the copy was written by DMA */
++        if (roq_read_frame(ri, 0, fmvFinish) <= 0)
++            break;
++        pageFlip();                             /* shown at the next vertical blank */
++
++        if (!audio)                             /* the sound starts with the first picture */
++        {
++            MARS_SYS_COMM4 = MARS_CMD_FMV_AUDIO;
++            audio = true;
++            start = *(volatile int32*)&gFrameIndex;
++        }
++
++        frames++;
++        int32 due = start + (frames * displayRate) / (int32)ri->framerate;
++        while (*(volatile int32*)&gFrameIndex - due < 0) {}
++    }
++
++    /* the end: sound off, the game's screen back */
++    FMV_SHARED(gFmvStop) = 1;
++    MARS_WAIT();
++    pageWait();
++    SH2_DMA_CHCR1 = 0;
++
++    fmvWaitVBlank();
++    MARS_VDP_DISPMODE = MARS_224_LINES | MARS_VDP_MODE_OFF;
++    fmvLines(0, 0);                             /* the game's line tables, black */
++    if (gGamePalette)
++        osSetPalette(gGamePalette);
++    fmvWaitVBlank();
++    MARS_VDP_DISPMODE = MARS_224_LINES | MARS_VDP_MODE_256;
++
++    renderScratchDone();
++    CacheClear();
++    return true;
++}
+diff --git a/src/platform/32x/roq.h b/src/platform/32x/roq.h
+new file mode 100755
+index 0000000..d74dfd6
+--- /dev/null
++++ b/src/platform/32x/roq.h
+@@ -0,0 +1,129 @@
++/* RoQ video decoder - from Victor Luchits' Doom 32X: Resurrection (d32xr, MIT licence,
++   Copyright (c) 2024 Victor Luchits), decoder by Dr. Tim Ferguson (2001).
++   FMV-1 (OpenLara CD32X): used unchanged except the CD32X guard, the extern "C" block and
++   the SH2 DMA registers/constants (OpenLara's 32x.h is C++ only and lacks them). */
++#ifndef _av_roq_h
++#define _av_roq_h
++#ifdef CD32X
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include <stdint.h>
++
++#ifndef SH2_DMA_SAR1                   /* the master's DMA channel 1 (picture copy) */
++#define SH2_DMA_SAR1    (*(volatile unsigned long *)0xFFFFFF90)
++#define SH2_DMA_DAR1    (*(volatile unsigned long *)0xFFFFFF94)
++#define SH2_DMA_TCR1    (*(volatile unsigned long *)0xFFFFFF98)
++#define SH2_DMA_CHCR1   (*(volatile unsigned long *)0xFFFFFF9C)
++#endif
++
++#ifndef SH2_DMA_CHCR_DE
++#define SH2_DMA_CHCR_DM_INC   (1<<14)  // destination address incremented
++#define SH2_DMA_CHCR_SM_INC   (1<<12)  // source address incremented
++#define SH2_DMA_CHCR_TS_16BU  (3<<10)  // 16-byte units
++#define SH2_DMA_CHCR_AR_ARM   (1<<9)   // auto-request
++#define SH2_DMA_CHCR_AL_AH    (1<<7)   // DACK active high
++#define SH2_DMA_CHCR_DS_EDGE  (1<<6)   // DREQ by edge
++#define SH2_DMA_CHCR_DL_AH    (1<<5)   // DREQ rising edge
++#define SH2_DMA_CHCR_TB_CS    (0<<4)   // cycle-steal
++#define SH2_DMA_CHCR_TA_DA    (0<<3)   // dual address
++#define SH2_DMA_CHCR_TE       (1<<1)   // transfer ended
++#define SH2_DMA_CHCR_DE       (1<<0)   // DMA enabled
++#endif
++
++#define RoQ_INFO				0x1001
++#define RoQ_QUAD_CODEBOOK		0x1002
++#define RoQ_QUAD_VQ				0x1011
++#define RoQ_SOUND_MONO			0x1020
++#define RoQ_SOUND_STEREO		0x1021
++#define RoQ_SIGNAGURE 			0x1084
++
++#define RoQ_ID_MOT		0x00
++#define RoQ_ID_FCC		0x01
++#define RoQ_ID_SLD		0x02
++#define RoQ_ID_CCC		0x03
++
++#define RoQ_MAX_CANVAS_SIZE 288*224
++
++#define RoQ_SAMPLE_RATE    22050
++
++#ifdef __32X__
++#define RoQ_ATTR_SDRAM
++//#define RoQ_ATTR_SDRAM  __attribute__((section(".data"), aligned(16)))
++#else
++#define RoQ_ATTR_SDRAM
++#endif
++
++typedef struct {
++	uint8_t y0123[4];
++	uint8_t uvb[2];
++} roq_yuvcell;
++
++typedef struct {
++	union {
++		short rgb555[4];
++		int rgb555x2[2];
++	};
++} roq_cell;
++
++typedef struct {
++	char idx[4];
++} roq_qcell;
++
++typedef struct {
++	unsigned char* data;
++	unsigned char* page_base;
++	unsigned char* page_end;
++	unsigned char *dma_base;
++	unsigned char *dma_dest;
++	unsigned char *snddma_base;
++	unsigned char *snddma_dest;
++	short eof, bof;
++	unsigned char *backupdma_dest;
++	char clear_cache; // whether the CPU cache needs to be cleared after reading a chunk
++} roq_file;
++
++typedef void (*roq_getchunk_t)(roq_file*);
++typedef void (*roq_retchunk_t)(roq_file*);
++
++typedef struct {
++	unsigned chunk_arg0, chunk_arg1;
++	unsigned vqflg;
++	unsigned vqflg_pos;
++	unsigned vqid;
++	unsigned char *buf;
++	int buf_len;
++	struct roq_info_s *ri;
++} roq_parse_ctx;
++
++typedef struct roq_info_s {
++	short *canvascopy;
++	roq_cell *cells_u;
++	roq_qcell *qcells_u;
++	roq_cell *cells;
++	roq_qcell *qcells;
++	roq_file *fp;
++	int buf_size;
++	unsigned width, height, frame_num;
++	int display_height;
++	roq_getchunk_t get_chunk;
++	roq_retchunk_t ret_chunk;
++	short *framebuffer, *canvas;
++	int canvas_pitch;
++	unsigned framerate, displayrate, frametics, frametics_frac;
++} roq_info;
++
++/* -------------------------------------------------------------------------- */
++
++void roq_init(roq_info* ri, roq_file *fp, roq_getchunk_t getch, roq_retchunk_t retch, int displayrate, short *framebuffer);
++int roq_read_info(roq_file* fp, roq_info* ri) __attribute__((optimize("Os")));
++int roq_read_frame(roq_info* ri, char loop, void (*finish)(void))
++	RoQ_ATTR_SDRAM
++	;
++
++#ifdef __cplusplus
++}
++#endif
++#endif // CD32X
++#endif
+diff --git a/src/platform/32x/roq_read.c b/src/platform/32x/roq_read.c
+new file mode 100755
+index 0000000..c142abe
+--- /dev/null
++++ b/src/platform/32x/roq_read.c
+@@ -0,0 +1,593 @@
++/* ------------------------------------------------------------------------
++ * Id Software's RoQ video file format decoder
++ *
++ * Dr. Tim Ferguson, 2001.
++ * For more details on the algorithm:
++ *         http://www.csse.monash.edu.au/~timf/videocodec.html
++ *
++ * This is a simple decoder for the Id Software RoQ video format.  In
++ * this format, audio samples are DPCM coded and the video frames are
++ * coded using motion blocks and vector quantisation.
++ *
++ * Note: All information on the RoQ file format has been obtained through
++ *   pure reverse engineering.  This was achieved by giving known input
++ *   audio and video frames to the roq.exe encoder and analysing the
++ *   resulting output text and RoQ file.  No decompiling of the Quake III
++ *   Arena game was required.
++ *
++ * You may freely use this source code.  I only ask that you reference its
++ * source in your projects documentation:
++ *       Tim Ferguson: http://www.csse.monash.edu.au/~timf/
++ * ------------------------------------------------------------------------ */
++/* FMV-1 (OpenLara CD32X): Victor Luchits' copy from Doom 32X: Resurrection (MIT), unchanged
++   except this CD32X guard, MARS (selects the SH2 assembly paths), no 32x.h, and SLD below. */
++#ifdef CD32X
++#define MARS
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include "roq.h"                       /* has the SH2 DMA registers (32x.h is C++) */
++
++/* -------------------------------------------------------------------------- */
++
++static inline int roq_fgetc(roq_file* fp) {
++	return *fp->data++;
++}
++
++static inline int roq_fgetsc(roq_file* fp) {
++	return *(int8_t *)fp->data++;
++}
++
++static inline int roq_feof(roq_file* fp) {
++	return fp->eof && fp->data == NULL;
++}
++
++static inline unsigned short get_word(roq_file* fp)
++{
++	unsigned short ret;
++	ret = (fp->data[0]);
++	ret |= (fp->data[1]) << 8;
++	fp->data += 2;
++	return ret;
++}
++
++/* -------------------------------------------------------------------------- */
++static inline unsigned int get_long(roq_file* fp)
++{
++	unsigned int ret;
++	ret = (fp->data[0]);
++	ret |= (fp->data[1]) << 8;
++	ret |= (fp->data[2]) << 16;
++	ret |= (fp->data[3]) << 24;
++	fp->data += 4;
++	return ret;
++}
++
++
++/* -------------------------------------------------------------------------- */
++int roq_read_info(roq_file* fp, roq_info* ri)
++{
++	unsigned int head1;
++	int head2;
++	unsigned framerate;
++	unsigned chunk_id;
++
++	ri->get_chunk(fp);
++
++	head1 = get_word(fp);
++	head2 = get_long(fp);
++	framerate = get_word(fp);
++
++	ri->ret_chunk(ri->fp);
++
++	if (head1 != RoQ_SIGNAGURE && head2 != -1)
++	{
++		//printf("Not an RoQ file.\n");
++		return 1;
++	}
++
++	ri->framerate = framerate;
++	ri->frametics = (ri->displayrate * 0x10000 / framerate) >> 16;
++	ri->frametics_frac = (ri->displayrate * 0x10000 / framerate) & 0xffff;
++
++	while (!roq_feof(fp))
++	{
++		ri->get_chunk(fp);
++
++		if (roq_feof(fp)) {
++			break;
++		}
++
++		chunk_id = get_word(fp);
++		/*chunk_size = */get_long(fp);
++		roq_fgetc(fp);
++		roq_fgetc(fp);
++
++		if (chunk_id == RoQ_INFO)		/* video info */
++		{
++			ri->width = get_word(fp);
++			ri->height = get_word(fp);
++		}
++
++		ri->ret_chunk(ri->fp);
++
++		if (chunk_id == RoQ_INFO)
++			break;
++	}
++
++	if (roq_feof(fp))
++	{
++		// no info chunk
++		return 1;
++	}
++
++	ri->canvas = ri->framebuffer;
++
++	ri->display_height = ri->height;
++	if (ri->canvas_pitch * ri->display_height < RoQ_MAX_CANVAS_SIZE)
++	{
++		if (ri->width < 320)
++			ri->canvas += (320 - ri->width) / 2;
++		ri->canvas = (void *)((uintptr_t)ri->canvas & ~15);
++		ri->canvas_pitch = (160 + ri->width / 2 + 15) & ~15;
++	}
++	else
++	{
++		ri->canvas_pitch = ri->width;
++	}
++	while (ri->canvas_pitch * ri->display_height > RoQ_MAX_CANVAS_SIZE || ri->display_height > 224)
++		ri->display_height -= 16;
++
++	ri->frame_num = 0;
++
++	return 0;
++}
++
++/* -------------------------------------------------------------------------- */
++static inline void apply_motion_4x4(roq_parse_ctx* ctx, unsigned x, unsigned y, unsigned char mv, char mean_x, char mean_y)
++{
++	int mx, my, i;
++	short *src, *dst;
++	roq_info *ri = ctx->ri;
++	int pitch = ri->canvas_pitch;
++
++	mx = x + 8 - (mv / 16) - mean_x;
++	my = y + 8 - (mv & 0xf) - mean_y;
++
++	dst = ri->canvas + y * ri->canvas_pitch + x;
++	src = ri->canvascopy + my * ri->canvas_pitch + mx;
++
++	for (i = 0; i < 4; i++)
++	{
++		dst[0] = src[0];
++		dst[1] = src[1];
++		dst[2] = src[2];
++		dst[3] = src[3];
++		src += pitch;
++		dst += pitch;
++	}
++}
++
++/* -------------------------------------------------------------------------- */
++static inline void apply_motion_8x8(roq_parse_ctx* ctx, unsigned x, unsigned y, unsigned char mv, char mean_x, char mean_y)
++{
++	int mx, my, i;
++	short *src, *dst;
++	roq_info *ri = ctx->ri;
++	int pitch = ri->canvas_pitch;
++
++	mx = x + 8 - (mv / 16) - mean_x;
++	my = y + 8 - (mv & 0xf) - mean_y;
++	
++	dst = ri->canvas + y * ri->canvas_pitch + x;
++	src = ri->canvascopy + my * ri->canvas_pitch + mx;
++
++	for (i = 0; i < 8; i++)
++	{
++		dst[0] = src[0];
++		dst[1] = src[1];
++		dst[2] = src[2];
++		dst[3] = src[3];
++		dst[4] = src[4];
++		dst[5] = src[5];
++		dst[6] = src[6];
++		dst[7] = src[7];
++		src += pitch;
++		dst += pitch;
++	}
++}
++
++void roq_init(roq_info* ri, roq_file* fp, roq_getchunk_t getch, roq_retchunk_t retch, int displayrate, short *framebuffer)
++{
++	ri->fp = fp;
++	ri->get_chunk = getch;
++	ri->ret_chunk = retch;
++	ri->framebuffer = framebuffer;
++	ri->displayrate = displayrate;
++	ri->cells = ri->cells_u + 128;
++	ri->qcells = ri->qcells_u + 128;
++	fp->backupdma_dest = (unsigned char *)framebuffer;
++}
++
++/* -------------------------------------------------------------------------- */
++
++#define RMASK ((1<<5)-1)
++#define GMASK (((1<<10)-1) & ~RMASK)
++#define BMASK (((1<<15)-1) & ~(RMASK|GMASK))
++
++#define YUVClip8(v) (__builtin_expect((v) & ~YUV_MASK2, 0) ? (__builtin_expect((int)(v) < 0, 0) ? 0 : YUV_MASK2) : (v))
++#define YUVRGB555(r,g,b) ((((((r)) >> (10+(YUV_FIX2-7))))) | (((((g)) >> (5+(YUV_FIX2-7)))) & GMASK) | (((((b)) >> (0+(YUV_FIX2-7)))) & BMASK))
++
++#define YUV_FIX2 8                   // fixed-point precision for YUV->RGB
++const int YUV_MUL2 = (1 << YUV_FIX2);
++const int YUV_NUDGE2 = (1 << (YUV_FIX2 - 1));
++const int YUV_MASK2 = (256 << YUV_FIX2) - 1;
++
++const int v1402C_ = 1.402000 * YUV_MUL2;
++const int v0714C_ = 0.714136 * YUV_MUL2;
++
++const int u0344C_ = 0.344136 * YUV_MUL2;
++const int u1772C_ = 1.772000 * YUV_MUL2;
++
++#define yuv2rgb555(y,u,v) \
++	YUVRGB555( \
++		YUVClip8(((unsigned)y << YUV_FIX2) + (v1402C_ * (v-128) + YUV_NUDGE2)), \
++		YUVClip8(((unsigned)y << YUV_FIX2) - (u0344C_ * (u-128) + v0714C_ * (v-128) - YUV_NUDGE2)), \
++		YUVClip8(((unsigned)y << YUV_FIX2) + (u1772C_ * (u-128) + YUV_NUDGE2)) \
++	)
++
++/* -------------------------------------------------------------------------- */
++
++typedef int (*roq_applier)(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf);
++
++static int roq_apply_mot(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf) RoQ_ATTR_SDRAM;
++static int roq_apply_fcc(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf) RoQ_ATTR_SDRAM;
++static int roq_apply_sld(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf) RoQ_ATTR_SDRAM;
++static int roq_apply_cc(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf) RoQ_ATTR_SDRAM;
++
++static int roq_apply_fcc2(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf) RoQ_ATTR_SDRAM;
++static int roq_apply_sld2(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf) RoQ_ATTR_SDRAM;
++static int roq_apply_cc2(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf) RoQ_ATTR_SDRAM;
++
++roq_applier appliers[] = { &roq_apply_mot, &roq_apply_fcc, &roq_apply_sld, &roq_apply_cc };
++roq_applier appliers2[] = { &roq_apply_mot, &roq_apply_fcc2, &roq_apply_sld2, &roq_apply_cc2 };
++
++static inline int roq_read_vqid(roq_parse_ctx* ctx, unsigned char* buf, unsigned* pvqid)
++{
++	int adv = 0;
++	unsigned vqid;
++
++#ifdef MARS
++	if (ctx->vqflg_pos == 0)
++	{	
++		ctx->vqflg = ((buf[1] << 8) | buf[0]) << 16;
++		ctx->vqflg_pos = 8;
++		adv = 2;
++	}
++
++	__asm volatile(
++		"shll %1\n\t"
++		"movt r0\n\t"
++		"shll %1\n\t"
++		"movt %0\n\t"
++		"add r0, r0\n\t"
++		"add r0, %0\n\t"
++		: "=r"(vqid), "+r"(ctx->vqflg) : : "r0"
++	);
++#else
++	if (ctx->vqflg_pos == 0)
++	{
++		unsigned shf;
++		unsigned qfl = buf[0] | (buf[1] << 8);
++
++		ctx->vqflg = 0;
++		for (shf = 0; shf < 16; shf += 2) {
++			ctx->vqflg <<= 2;
++			ctx->vqflg |= (qfl >> shf) & 0x3;
++		}
++
++		ctx->vqflg_pos = 8;
++		adv = 2;
++	}
++
++	vqid = ctx->vqflg & 0x3;
++	ctx->vqflg >>= 2;
++#endif
++
++	*pvqid = vqid;
++	ctx->vqflg_pos--;
++
++	return adv;
++}
++
++static int roq_apply_mot(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf)
++{
++	return 0;
++}
++
++static int roq_apply_fcc(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf)
++{
++	apply_motion_8x8(ctx, x, y, buf[0], ctx->chunk_arg1, ctx->chunk_arg0);
++	return 1;
++}
++
++static int roq_apply_sld(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf)
++{
++	int i, j;
++	roq_info* ri = ctx->ri;
++	unsigned pitch = ri->canvas_pitch;
++	roq_qcell *qcell = ri->qcells + buf[0];
++	short *dst = ri->canvas + y * pitch + x;
++	short *dst2 = dst + pitch;
++
++	pitch *= 2;
++
++	for (i = 0; i < 4; i += 2)
++	{
++		roq_cell *cell0 = ri->cells + qcell->idx[i];
++		roq_cell *cell1 = ri->cells + qcell->idx[i+1];
++
++		for (j = 0; j < 2; j++)
++		{
++			/* FMV-1: plain C instead of the SH2 assembly here - the assembly put the
++			   cell's second pixel at x+4 and the next cell's first at x+2 (checked against
++			   ffmpeg's decoder); this order matches it.  Pixel pairs: 2x upscale. */
++			short a0 = cell0->rgb555[j*2], a1 = cell0->rgb555[j*2+1];
++			short b0 = cell1->rgb555[j*2], b1 = cell1->rgb555[j*2+1];
++			dst[0] = dst[1] = dst2[0] = dst2[1] = a0;
++			dst[2] = dst[3] = dst2[2] = dst2[3] = a1;
++			dst[4] = dst[5] = dst2[4] = dst2[5] = b0;
++			dst[6] = dst[7] = dst2[6] = dst2[7] = b1;
++
++			dst += pitch;
++			dst2 += pitch;
++		}
++	}
++
++	return 1;
++}
++
++static int roq_apply_cc(roq_parse_ctx* ctx, unsigned xp, unsigned yp, char* buf)
++{
++	unsigned k;
++	unsigned x, y;
++	int bpos = 0;
++
++	for (k = 0; k < 4; k++)
++	{
++		unsigned vqid;
++
++		x = (k & 1) * 4;
++		x += xp;
++
++		y = (k & 2) * 2;
++		y += yp;
++
++		bpos += roq_read_vqid(ctx, (uint8_t *)&buf[bpos], &vqid);
++
++		bpos += appliers2[vqid](ctx, x, y, &buf[bpos]);
++	}
++
++	return bpos;
++}
++
++static int roq_apply_fcc2(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf)
++{
++	apply_motion_4x4(ctx, x, y, buf[0], ctx->chunk_arg1, ctx->chunk_arg0);
++	return 1;
++}
++
++static int roq_apply_sld2(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf)
++{
++	roq_qcell *qcell = ctx->ri->qcells + buf[0];
++	roq_apply_cc2(ctx, x, y, qcell->idx);
++	return 1;
++}
++
++static int roq_apply_cc2(roq_parse_ctx* ctx, unsigned x, unsigned y, char* buf)
++{
++	roq_info* ri = ctx->ri;
++	unsigned pitch = ri->canvas_pitch;
++	int *dst = (int *)(ri->canvas + y * pitch + x);
++	roq_cell *cell0, *cell1, *cell2, *cell3;
++
++	pitch /= 2;
++
++	cell0 = ri->cells + buf[0];
++	cell1 = ri->cells + buf[1];
++
++	dst[0] = cell0->rgb555x2[0];
++	dst[1] = cell1->rgb555x2[0];
++	dst += pitch;
++
++	dst[0] = cell0->rgb555x2[1];
++	dst[1] = cell1->rgb555x2[1];
++	dst += pitch;
++
++	cell2 = ri->cells + buf[2];
++	cell3 = ri->cells + buf[3];
++
++	dst[0] = cell2->rgb555x2[0];
++	dst[1] = cell3->rgb555x2[0];
++	dst += pitch;
++
++	dst[0] = cell2->rgb555x2[1];
++	dst[1] = cell3->rgb555x2[1];
++
++	return 4;
++}
++
++/* -------------------------------------------------------------------------- */
++
++void roq_read_vq(roq_parse_ctx *ctx, unsigned char *buf, int chunk_size, int dodma)
++{
++	int bpos = 0;
++	int xpos, ypos;
++	roq_info *ri = ctx->ri;
++	int width = ri->width;
++	int dmafrom = 0, dmato = 0;
++	int finalxfer = 0;
++
++	ypos = 0;
++	for (bpos = 0; bpos < chunk_size; )
++	{
++		int xp, yp;
++
++		for (xpos = 0; xpos < width; xpos += 16)
++		{
++			for (yp = ypos; yp < ypos + 16; yp += 8)
++			{
++				for (xp = xpos; xp < xpos + 16; xp += 8)
++				{
++					bpos += roq_read_vqid(ctx, &buf[bpos], &ctx->vqid);
++					bpos += appliers[ctx->vqid](ctx, xp, yp, (char *)&buf[bpos]);
++					if (bpos >= chunk_size)
++						goto checknext;
++				}
++			}
++		}
++
++checknext:
++		if (dodma)
++		{
++			int othery;
++
++xfer:
++			othery = ypos;
++			if (othery > dmato)
++			{
++				if (dmato > 0) 
++				{
++					if (finalxfer)
++					{
++						while (!(SH2_DMA_CHCR1 & SH2_DMA_CHCR_TE)) ; // wait on TE
++					}
++					else
++					{
++						if (!(SH2_DMA_CHCR1 & SH2_DMA_CHCR_TE))
++							goto next; // do not wait on TE
++					}
++					SH2_DMA_CHCR1 = 0; // clear TE
++				}
++
++				dmafrom = dmato;
++				dmato = othery;
++
++				// start DMA
++				SH2_DMA_SAR1 = (uint32_t)(ri->canvas + ri->canvas_pitch*dmafrom/2*sizeof(short));
++				SH2_DMA_DAR1 = (uint32_t)(ri->canvascopy + ri->canvas_pitch*dmafrom/2*sizeof(short));
++				// xfer count (4 * # of 16 byte units)
++				SH2_DMA_TCR1 = ((((dmato - dmafrom)*ri->canvas_pitch*sizeof(short)) >> 4) << 2);
++				SH2_DMA_CHCR1 = SH2_DMA_CHCR_DM_INC|SH2_DMA_CHCR_SM_INC|SH2_DMA_CHCR_TS_16BU|SH2_DMA_CHCR_AR_ARM|SH2_DMA_CHCR_TB_CS|SH2_DMA_CHCR_DS_EDGE|SH2_DMA_CHCR_AL_AH|SH2_DMA_CHCR_DL_AH|SH2_DMA_CHCR_TA_DA|SH2_DMA_CHCR_DE;
++			}
++
++			if (finalxfer)
++			{
++				while (!(SH2_DMA_CHCR1 & SH2_DMA_CHCR_TE)) ; // wait on TE
++				return;
++			}
++		}
++
++next:
++		xpos = 0;
++		ypos += 16;
++		if (ypos >= ri->display_height)
++			break;
++	}
++
++	if (dodma && dmato < ri->display_height)
++	{
++		finalxfer = 1;
++		goto xfer;
++	}
++}
++
++int roq_read_frame(roq_info* ri, char loop, void (*finish)(void))
++{
++	int i, nv1, nv2;
++	roq_file* fp = ri->fp;
++	int chunk_id = 0, chunk_arg0 = 0, chunk_arg1 = 0;
++	int chunk_size = 0;
++	roq_parse_ctx ctx;
++
++	while (1)
++	{
++		chunk_id = 0;
++
++		ri->get_chunk(fp);
++
++		if (roq_feof(fp)) {
++			break;
++		}
++
++		chunk_id = get_word(fp);
++		chunk_size = get_long(fp);
++		chunk_arg0 = roq_fgetc(fp);
++		chunk_arg1 = roq_fgetc(fp);
++
++		if (chunk_id == RoQ_QUAD_VQ)
++			break;
++
++		switch (chunk_id)
++		{
++		case RoQ_QUAD_CODEBOOK:
++			if ((nv1 = chunk_arg1) == 0) nv1 = 256;
++			if ((nv2 = chunk_arg0) == 0 && (nv1 * 6 < chunk_size)) nv2 = 256;
++
++			for (i = 0; i < nv1; i++)
++			{
++				uint8_t y[4], u, v;
++				roq_cell *cell = ri->cells + (int8_t)i;
++
++				y[0] = roq_fgetsc(fp);
++				y[1] = roq_fgetsc(fp);
++				y[2] = roq_fgetsc(fp);
++				y[3] = roq_fgetsc(fp);
++				u = roq_fgetsc(fp);
++				v = roq_fgetsc(fp);
++
++				cell->rgb555[0] = yuv2rgb555(y[0], u, v);
++				cell->rgb555[1] = yuv2rgb555(y[1], u, v);
++				cell->rgb555[2] = yuv2rgb555(y[2], u, v);
++				cell->rgb555[3] = yuv2rgb555(y[3], u, v);
++			}
++
++			if (nv2 > 127)
++			{
++				memcpy(ri->qcells, fp->data, 128*4);
++				memcpy(ri->qcells - 128, fp->data + 128 * 4, (nv2 - 128)*4);
++			}
++			else
++			{
++				memcpy(ri->qcells, fp->data, nv2*4);
++			}
++			break;
++		}
++
++		ri->ret_chunk(ri->fp);
++	}
++
++	finish();
++
++	if (chunk_id != RoQ_QUAD_VQ)
++	{
++		ri->ret_chunk(ri->fp);
++		return 0;
++	}
++
++	ri->frame_num++;
++
++	ctx.ri = ri;
++	ctx.chunk_arg0 = chunk_arg0;
++	ctx.chunk_arg1 = chunk_arg1;
++	ctx.vqflg = 0;
++	ctx.vqflg_pos = 0;
++	ctx.vqid = RoQ_ID_MOT;
++
++	roq_read_vq(&ctx, fp->data, chunk_size, 1);
++
++	ri->ret_chunk(ri->fp);
++	return 1;
++}
++
++#endif // CD32X
