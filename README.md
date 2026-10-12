@@ -78,11 +78,21 @@ Saving is not available in Lara's Home.
 - The original game's short story cues and the cut-scene dialogue are not played (not on the album).
 - The cut-scenes between levels have not been tested on hardware yet.
 - No FMVs; *Unfinished Business* is not included.
-- About 12–20 frames per second – see **Frame rate** below.
+- About 7–9 frames per second – see **Frame rate** below.
 
 ## Frame rate
-**Status:** about 12–20 frames per second, depending on the room. That is the speed of
-OpenLara's own 32X engine; the drawing code is unchanged in this port.
+**Status:** about **7–9 frames per second**, measured on real hardware with a profiler build
+(Caves, Lost Valley, a fight). The drawing code is still OpenLara's own 32X renderer.
+
+Where a frame's ~120 ms go (profiler):
+
+| Part | Time per frame |
+|---|---|
+| Reading the pad (Sega CD) | 0 ms |
+| Waiting for the screen | 0 ms |
+| Game logic | 10–36 ms |
+| Preparing the scene (transform, sort) | 19–27 ms |
+| Drawing (both SH2s) | 58–111 ms – of which the main SH2 waits 16–30 ms for the second one |
 
 **What has been done so the CD version keeps that speed:**
 - **The game runs from the RAM cart, exactly like a cartridge.** The CD drive is only used to
@@ -98,11 +108,13 @@ OpenLara's own 32X engine; the drawing code is unchanged in this port.
   cart access, so a cart that can answer 32-bit reads can't make the console read it faster.
   The game already reads 32 bits at a time where it can.
 
-**Next step:** a profiler build that shows, on screen, how each frame's time is split between
-input, game logic, drawing and the second SH2. The most likely CD-side gain is the controller
-read: each frame the SH2 waits for the Sega CD to answer with the pad state, and that wait can
-be removed – worth perhaps a few frames per second. Bigger gains would need changes to
-OpenLara's renderer itself (less detail or new drawing code).
+- **The controller read.** The profiler shows it costs nothing, so there is nothing to win there.
+
+**In progress:** drawing is the bottleneck. The two SH2s used to take turns layer by layer and
+wait for each other; the next build lets each SH2 draw its own half of the screen (top/bottom,
+balanced every frame), which removes that waiting. Expected: about 1–2 frames per second more.
+A bigger step – letting the second SH2 draw while the first one runs the game logic – would
+need a larger rework of the engine.
 
 ## Credits
 - **OpenLara** – XProger and contributors: https://github.com/XProger/OpenLara
