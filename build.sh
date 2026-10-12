@@ -33,6 +33,9 @@ if [ -f "$HERE/subcpu/cd/OPENLARA.32X" ]; then
   NAME="$(dd if="$HERE/subcpu/cd/OPENLARA.32X" bs=1 skip=$((0x3C0)) count=8 2>/dev/null)"
   [ "$NAME" = "OpenLara" ] || { echo "*** subcpu/cd/OPENLARA.32X is not OpenLara ($NAME) - stopping"; exit 1; }
 fi
+# CAVES-1: the game (cart 0) must end before Caves (0x080000), Caves before the level slot (2 MB)
+SZ=$(stat -c %s "$HERE/subcpu/cd/OPENLARA.32X"); [ "$SZ" -lt 524288 ] || { echo "*** OPENLARA.32X is $SZ bytes - over 512 KB, it would overwrite Caves in the cart - stopping"; exit 1; }
+SZ=$(stat -c %s "$HERE/subcpu/cd/LEVEL1.PKD");   [ "$SZ" -le 1572864 ] || { echo "*** LEVEL1.PKD is $SZ bytes - over 1.5 MB, it would reach the level slot - stopping"; exit 1; }
 echo "==> disc checked: OpenLara loader + OpenLara ROM"
 echo "==> CD audio";  python3 "$HERE/tools/make_music_tracks.py" "$HERE/music_map.txt" "$HERE/soundtrack_wav" "$HERE/soundtrack_cd"
 cd "$HERE/subcpu" && python3 make_mixed_cd2.py CDROMPlayer.iso $(ls "$HERE"/soundtrack_cd/Track*.wav | sort) --out CDROMPlayer_music

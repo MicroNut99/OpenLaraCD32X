@@ -1,6 +1,6 @@
 # Tomb Raider for Sega CD + 32X (OpenLara CD32X)
 
-Tomb Raider (1996) on the **Sega CD32X**, built on XProger's **OpenLara** 32X engine. **Version 1.1.**
+Tomb Raider (1996) on the **Sega CD32X**, built on XProger's **OpenLara** 32X engine. **Version 1.2.**
 The whole game runs from one CD: each level is loaded from the disc into a 4 MB RAM cart, with
 CD music, PCM sound effects and saving.
 
@@ -36,6 +36,23 @@ Full instructions: `docs/OPENLARA_CD32X_HANDOFF.md`. In short:
 Put the RAM cart in the 32X, the disc in the Sega CD, and switch on. The picture appears while
 OpenLara is copied into the cart; then each level shows the picture with a **red loading bar**
 along the bottom while it loads from the disc.
+
+## Fast start
+Caves (Level 1) is also the title menu, so it is needed every time the game starts. It now has
+its own place in the RAM cart and stays there – the cart keeps its contents without power.
+
+- **First start:** Caves loads from the CD as usual (red bar). Afterwards a record in the cart
+  says it is there: its length and a checksum, written only after a complete copy.
+- **Every start after that:** the game checks the record against what is really in the cart
+  (same length as Caves on this disc, checksum matches). If it is all there, nothing is loaded
+  and the menu comes up almost at once.
+- **Back to the menu, or playing Caves:** never loads Caves again.
+- **Something wrong?** Hold **A + B + C** while the game starts: Caves is always reloaded
+  from the CD. (Also use this after rebuilding the disc with a changed Caves of exactly the
+  same size – the only change the check can't see.)
+
+Cart layout: game 0–0.5 MB, Caves 0.5–2 MB, the level being played 2–3.94 MB, settings and
+saves in the last 64 KB. `build.sh` refuses to build if the game or Caves would overlap.
 
 ## Controls (6-button pad)
 | Button | Action |
@@ -160,6 +177,7 @@ The version is in the file `VERSION` and is shown small in the corner of the loa
 | Version | What changed |
 |---|---|
 | 1.0 | The whole game from CD: all levels, CD music, PCM sound effects, saving in the RAM cart, all enemies, full passport, loading screen. |
+| 1.2 | Fast start: Caves (the title menu) stays in the RAM cart and is not loaded again – hold A+B+C at start to reload it. |
 | 1.1 | Faster: the two SH2s draw separate halves of the screen, game logic runs while the second SH2 is still drawing, and the next frame is prepared without waiting for the screen refresh (fights 7–8 → 9–10 fps, exploring 9–15 fps). Profiler build (`PROF=1`). Version shown on the loading picture. |
 
 ## Credits
