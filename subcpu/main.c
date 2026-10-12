@@ -163,6 +163,8 @@ static int cur_img = 0;
    match the engine's enum LevelID (OpenLara-src/src/fixed/common.h). */
 #define OL_LEVEL_BASE   100
 #define OL_LEVEL_SLOT   16
+#define OL_CAVES_BASE   200            /* CAVES-1: 200 + LevelID -> slot 4 = cart 0x080000 */
+#define OL_CAVES_SLOT   4
 static const char *const ol_level_files[] = {
     "TITLE.PKD",   "GYM.PKD",     "LEVEL1.PKD",  "LEVEL2.PKD",  "LEVEL3A.PKD",
     "LEVEL3B.PKD", "CUT1.PKD",    "LEVEL4.PKD",  "LEVEL5.PKD",  "LEVEL6.PKD",
@@ -282,7 +284,9 @@ static int sfx_has_map = 0;
 static uint8_t pcm_onoff = 0xFF;              /* shadow: the ONOFF register cannot be read */
 static int pcm_next = 0;
 
-static void pcm_play(int id) {
+/* SFXVOL-1: vol = 1-64 from the SH2 (64 = full, lower = farther away; 0 = full).  The
+   chip's ENV register scales the sample linearly, so ENV = the effect's own level * vol / 64. */
+static void pcm_play(int id, int vol) {
     const sfx_t *e;
     int ch;
     if (id < 1 || id > sfx_count) return;
@@ -292,7 +296,8 @@ static void pcm_play(int id) {
     pcm_onoff |= (uint8_t)(1 << ch);          /* key off (restart from the start page) */
     write_byte(PCM_ONOFF, pcm_onoff);
     write_byte(PCM_CTRL, 0xC0 | ch);          /* sound on + registers of channel ch */
-    write_byte(PCM_ENV, e->vol);
+    if (vol <= 0 || vol > 64) vol = 64;
+    write_byte(PCM_ENV, (uint8_t)((e->vol * vol) >> 6));
     write_byte(PCM_PAN, 0xFF);
     write_byte(PCM_FDL, e->fd & 0xFF);
     write_byte(PCM_FDH, e->fd >> 8);
@@ -579,7 +584,11 @@ int main(void)
 #endif
             }
         }
-        uint16_t cmd = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15120);
+        /* SFXVOL-1: COMM0 (command) and COMM2 (its parameter) in ONE read - the effect's
+           volume comes in COMM2 with the pad request, at no extra round trip through the 68K */
+        uint32_t cmd32 = (uint32_t)do_md_cmd1(MD_CMD_READ_32X_32, 0xA15120);
+        uint16_t cmd = (uint16_t)(cmd32 >> 16);
+        uint16_t cmdParam = (uint16_t)(cmd32 & 0xFFFF);
         if (cmd == 0) {                  /* HW6: idle - pause ~0.2 ms before the 68K reads COMM0
                                             again (fewer reads while the SH2 may be writing it) */
             volatile int k;
@@ -592,7 +601,7 @@ int main(void)
            up and scrolled with pad = 0.  Answer CMD 48 first and start the next pass. */
         if ((cmd & 0xFF) == 48) {
             uint16_t pad = GET_PAD(0);
-            if (cmd >> 8) pcm_play(sfx_has_map ? sfx_map[((cmd >> 8) - 1) & 0xFF] : (cmd >> 8));   /* OL-6 */           /* K33: sound effect requested */
+            if (cmd >> 8) pcm_play(sfx_has_map ? sfx_map[((cmd >> 8) - 1) & 0xFF] : (cmd >> 8), cmdParam);   /* OL-6 */           /* K33: sound effect requested */
             /* K32: reply = pad (COMM8, upper 16 bits) + the 68K's vblank counter (COMM10, lower
                16 bits) in ONE 32-bit write.  The SH2 uses the counter to run Kobo's logic at
                its fixed 30 ms step, whatever the frame rate.  COMM10 is only used by the
@@ -641,6 +650,11 @@ int main(void)
             else if (img_idx >= OL_LEVEL_BASE && img_idx < OL_LEVEL_BASE + OL_LEVEL_COUNT) {
                 strcpy(img_name, ol_level_files[img_idx - OL_LEVEL_BASE]);   /* OL-2 */
                 cur_img = OL_LEVEL_SLOT;
+            }
+            else if (img_idx >= OL_CAVES_BASE && img_idx < OL_CAVES_BASE + OL_LEVEL_COUNT) {
+                /* CAVES-1: Caves (the title menu) stays in its own place, cart 0x080000 */
+                strcpy(img_name, ol_level_files[img_idx - OL_CAVES_BASE]);
+                cur_img = OL_CAVES_SLOT;
             }
             else if (img_idx <= 0) strcpy(img_name, "IMAGE.RAW");
             else sprintf(img_name, "IMAGE%d.RAW", img_idx);
