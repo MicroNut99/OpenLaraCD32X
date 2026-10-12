@@ -131,6 +131,18 @@ With the overlap (below) on top of the split, fights with raptors take 100–114
   times in ms). It uses the master's watchdog timer – the SH2 free-running timer is taken by
   OpenLara's start-up code and can't be used for timing.
 
+### Files changed for the frame rate
+All engine changes are in `engine/openlara-cd32x.patch` (apply it to OpenLara `3b268ca`) and
+only take effect in the CD build (`make CD32X=1`); the cartridge build is unchanged.
+
+| File | Change | Switch |
+|---|---|---|
+| `OpenLara-src/src/platform/32x/render.cpp` | **Screen split:** `flush_ot()` – each SH2 walks the whole scene and draws only its own rows; `drawPolyY()` – cuts polygons at the line between the halves; `flush_c()` – passes the line to the second SH2 and moves it only when one SH2 is clearly behind. **Overlap:** `flush_c()` returns after the main SH2's rows; `renderFinish()` waits for the second SH2, balances the line and clears the draw list; the second SH2 puts the finished frame on screen when both halves are done. Explained in the comment blocks at the top of the file. | `CD32X_SPLIT`, `CD32X_OVERLAP` (off: `-DCD32X_NO_SPLIT`, `-DCD32X_NO_OVERLAP`) |
+| `OpenLara-src/src/platform/32x/rasterizer.h` | `rasterizeSprite_c()` – sprites clip to the drawing SH2's own rows. | `CD32X_SPLIT` |
+| `OpenLara-src/src/platform/32x/main.cpp` | Game loop for the overlap (pad + game logic while the second SH2 draws, no wait for the screen refresh before preparing); the second SH2's clear job waits for the screen swap; the profiler (timer, on-screen numbers). | `CD32X_OVERLAP`, `CD32X_PROF` |
+| `OpenLara-src/src/platform/32x/Makefile` | `make CD32X=1 PROF=1` builds the profiler. | `PROF=1` |
+| `OpenLaraCD32X/build.sh` | `PROF=1 bash build.sh` makes the profiler disc. | `PROF=1` |
+
 ### Checked and ruled out
 - **32-bit cart reads.** The cart slot is 16 bits wide and the 32X sets the wait time for every
   cart access, so a cart that can answer 32-bit reads can't make the console read it faster.
