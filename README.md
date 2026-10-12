@@ -78,7 +78,31 @@ Saving is not available in Lara's Home.
 - The original game's short story cues and the cut-scene dialogue are not played (not on the album).
 - The cut-scenes between levels have not been tested on hardware yet.
 - No FMVs; *Unfinished Business* is not included.
-- About 12–20 frames per second, as OpenLara's 32X engine.
+- About 12–20 frames per second – see **Frame rate** below.
+
+## Frame rate
+**Status:** about 12–20 frames per second, depending on the room. That is the speed of
+OpenLara's own 32X engine; the drawing code is unchanged in this port.
+
+**What has been done so the CD version keeps that speed:**
+- **The game runs from the RAM cart, exactly like a cartridge.** The CD drive is only used to
+  load a level and to play music – never while drawing a frame.
+- **Both SH2 processors work on every frame** (OpenLara splits the drawing between them).
+- **Nothing else competes during play.** Once the game loop runs, the Sega CD side goes quiet;
+  the 68000 "heartbeat" that stalled the renderer was removed; the diagnostic text is off.
+- **No reload on a restart.** Dying, choosing Restart or loading a save from the same level
+  reuses the level already in the cart (faster restarts – not more frames, but less waiting).
+
+**Checked and ruled out:**
+- **32-bit cart reads.** The cart slot is 16 bits wide and the 32X sets the wait time for every
+  cart access, so a cart that can answer 32-bit reads can't make the console read it faster.
+  The game already reads 32 bits at a time where it can.
+
+**Next step:** a profiler build that shows, on screen, how each frame's time is split between
+input, game logic, drawing and the second SH2. The most likely CD-side gain is the controller
+read: each frame the SH2 waits for the Sega CD to answer with the pad state, and that wait can
+be removed – worth perhaps a few frames per second. Bigger gains would need changes to
+OpenLara's renderer itself (less detail or new drawing code).
 
 ## Credits
 - **OpenLara** – XProger and contributors: https://github.com/XProger/OpenLara
