@@ -20,6 +20,10 @@ echo "==> engine";      cd "$ENGINE" && rm -rf build && make CD32X=1 ${PROF:+PRO
 echo "==> ROM prep";    python3 "$HERE/tools/prep_openlara_cd.py" "$ENGINE/OpenLara.32x" "$HERE/subcpu/ROMS/OPENLARA.32X"
 echo "==> levels";      N=$(ls "$HERE"/gba/packer/out32x/*.PKD 2>/dev/null | wc -l); [ "$N" -ge 21 ] || { echo "*** only $N levels in gba/packer/out32x (21 expected) - stopping"; exit 1; }; cp "$HERE"/gba/packer/out32x/*.PKD "$HERE/subcpu/ROMS/"
 echo "==> sound packs"; rm -f "$HERE"/subcpu/ROMS/SFX*.BIN; python3 "$HERE/tools/make_sfx_packs.py" "$HERE/gba/packer/out32x" "$HERE/subcpu/ROMS"
+echo "==> movies";      rm -f "$HERE"/subcpu/ROMS/*.ROQ   # v1.3: movies that fit the level slot (1984 KB)
+for f in "$HERE"/fmv/*.ROQ; do
+  if [ -f "$f" ] && [ "$(stat -c %s "$f")" -le 2031616 ]; then cp "$f" "$HERE/subcpu/ROMS/"; echo "    $(basename "$f")"; fi
+done
 echo "==> SH2 loader";  cd "$HERE/sh2"    && make -f Makefile.cdloader clean && make -f Makefile.cdloader
 echo "==> Sub-CPU";     cd "$HERE/subcpu" && make clean && make cd
 

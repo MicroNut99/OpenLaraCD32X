@@ -1,8 +1,8 @@
 # Tomb Raider for Sega CD + 32X (OpenLara CD32X)
 
-Tomb Raider (1996) on the **Sega CD32X**, built on XProger's **OpenLara** 32X engine. **Version 1.2.**
+Tomb Raider (1996) on the **Sega CD32X**, built on XProger's **OpenLara** 32X engine. **Version 1.3.**
 The whole game runs from one CD: each level is loaded from the disc into a 4 MB RAM cart, with
-CD music, PCM sound effects and saving.
+CD music, PCM sound effects, saving, the cut-scenes with their voices and the game's movies.
 
 > **No game data is included.** You need your own copy of Tomb Raider 1 (PC) – the build converts
 > it. The music and the loading picture are also yours to supply. See *What you need*.
@@ -23,14 +23,20 @@ Emulators: Kega Fusion cannot emulate the 4MB RAM cart, so the game does not run
 | Tomb Raider 1 **PC** data (Steam/GOG: the `DATA` folder with `LEVEL1.PHD` …) | `OpenLaraCD32X/DATA/` → converted by the packer |
 | Music: WAV files (44.1 kHz, 16-bit, stereo) | `OpenLaraCD32X/soundtrack_wav/`, assigned in `music_map.txt` |
 | A loading picture (any size, 16:9 works best) | `OpenLaraCD32X/splash.jpg` |
+| Cut-scene sound: your Tomb Raider 1 **game CD** image (`.nrg`) – the voices are CD audio tracks on it | `tools/nrg_cut_audio.py` → `soundtrack_wav/cut22…cut25` |
+| Movies: the game's `FMV` folder (`*.RPL`) and **ffmpeg** | `tools/make_fmv.sh` → `OpenLaraCD32X/fmv/*.ROQ` |
 | Chilly Willy's Sega toolchain (`/opt/toolchains/sega`), Python 3 with Pillow, MinGW (for the packer) | your build machine (Linux / WSL) |
 
 ## Building
 Full instructions: `docs/OPENLARA_CD32X_HANDOFF.md`. In short:
 1. Get the engine: clone upstream OpenLara next to `OpenLaraCD32X/` and apply `engine/openlara-cd32x.patch`.
 2. Build the packer (`OpenLaraCD32X/gba/packer`) and convert your levels: `packer.exe 32x out32x`.
-3. `cd OpenLaraCD32X && bash build.sh`
-4. **Burn `OpenLaraCD32X/subcpu/CDROMPlayer_music.cue`** (with its `.bin`). The `.iso` alone has no music.
+3. Cut-scene sound and movies (optional – without them the cut-scenes are silent and the
+   passport has no movies to play):
+   `python3 tools/nrg_cut_audio.py "<Tomb Raider 1.nrg>" soundtrack_wav`
+   `bash tools/make_fmv.sh "<Tomb Raider 1>/FMV" fmv`
+4. `cd OpenLaraCD32X && bash build.sh`
+5. **Burn `OpenLaraCD32X/subcpu/CDROMPlayer_music.cue`** (with its `.bin`). The `.iso` alone has no music.
 
 ## Starting the game
 Put the RAM cart in the 32X, the disc in the Sega CD, and switch on. The picture appears while
@@ -68,8 +74,39 @@ saves in the last 64 KB. `build.sh` refuses to build if the game or Caves would 
 
 **In the inventory:** left/right turns the ring, up/down changes ring, A selects, B or Start goes back.
 
-**Passport** (in the inventory): **Load Game** (all levels, or your saved position), **Save Game**,
-**Exit to Title** – flip pages with left/right.
+**Passport** (in the inventory): **Load Game** (all levels, the cut-scenes, the movies, or your
+saved position), **Save Game**, **Exit to Title** – flip pages with left/right.
+
+## Cut-scenes and movies
+**Cut-scenes.** The four in-engine cut-scenes play after their levels as in the original, and can
+be picked any time from the passport's Load Game list: *Cutscene Qualopec*, *Cutscene Tihocan*,
+*Cutscene Natla's Mines*, *Cutscene Atlantis*. Picked from the passport, a cut-scene goes back
+to the main menu when it ends. Their sound – the voices and music – is the CD audio from the
+original game CD (game tracks 22–25), put on the disc as CD tracks 22–25 by
+`tools/nrg_cut_audio.py`. The sound may start a moment after the picture: the drive first has
+to seek to the track.
+
+**Movies.** On the title menu the passport's Load Game list also has *Movie Core*, *Movie
+Mansion*, *Movie Pyramid* and *Movie Escape* – the game's own FMVs. A movie loads into the RAM
+cart's level slot (red loading bar), then plays at 288 × 224 with its sound. **A, B, C or Start**
+skips it; afterwards you are back in the passport with the title music.
+
+How it works:
+- `tools/make_fmv.sh` converts the PC game's `.RPL` movies with ffmpeg to **RoQ**
+  (288 × 112, 15 frames/s, DPCM sound 22050 Hz mono). The player shows every line twice.
+- The **main SH2** decodes the pictures straight from the cart with the RoQ decoder from
+  Victor Luchits' *Doom 32X: Resurrection* (MIT; decoder by Dr. Tim Ferguson) into the 32X's
+  32768-colour mode. The previous picture is kept in fast RAM – borrowed from the 3D
+  renderer's face and vertex lists, which aren't used while a movie plays.
+- The **second SH2** plays the sound: it decodes the sound chunks from the cart and feeds the
+  32X's PWM sound chip by DMA. The PWM is ramped up while the movie loads, so there is no click.
+  Volume: `FMV_VOLUME` in `fmv.inc` (16 = full; 7 sounds right on hardware – the converted
+  sound is very loud).
+- If a movie can't play, the screen flashes for a second: red = no memory, yellow = not on the
+  disc or too big, blue = loading failed, magenta = not a RoQ file.
+- Only movies up to 1984 KB fit the level slot, so `build.sh` puts just those four on the disc.
+  The other seven (CAFE, SNOW, LIFT, VISION, CANYON, PRISON, END) are 6–20 MB; they would need
+  streaming from the CD while they play.
 
 ## Saving
 Saves and settings are stored in the RAM cart (battery-backed), one saved position. Save from the
@@ -80,21 +117,24 @@ Saving is not available in Lara's Home.
 - All 15 levels from Caves to the Great Pyramid, plus Lara's Home, chosen from the passport or
   played straight through.
 - CD music: one piece per level (your choice, in `music_map.txt`) and the secret chime.
-- Sound effects on the Sega CD's PCM chip, a set for each level.
-- Every enemy except Lara's double: wolves, bears, bats, raptors, T-Rex, lions, pumas, gorillas,
-  rats, crocodiles, mutants, centaurs, mummies, Larson, Pierre, the skater, the cowboy, Mr. T,
-  Natla and the Torso.
+- Sound effects on the Sega CD's PCM chip, a set for each level, quieter with distance.
+- Every enemy: wolves, bears, bats, raptors, T-Rex, lions, pumas, gorillas, rats, crocodiles,
+  mutants, centaurs, mummies, Larson, Pierre, the skater, the cowboy, Mr. T, Natla, the Torso
+  and Lara's double.
+- The four cut-scenes with their voices, also playable from the passport.
+- Four of the game's movies, playable from the passport on the title menu.
 - Saving and loading, options (sound, music, controls) remembered.
 
 ## Known limitations
-- **Lara's double** (Atlantis) does not move.
 - **Gorillas** do not climb ledges; **water rats** do not dive.
 - Enemy darts, bolts and bullets hit instantly (no visible projectile); an enemy may occasionally
   shoot through a thin wall.
-- Sound effects: one per frame, fixed volume (no fading with distance), the 31 most important per level.
-- The original game's short story cues and the cut-scene dialogue are not played (not on the album).
-- The cut-scenes between levels have not been tested on hardware yet.
-- No FMVs; *Unfinished Business* is not included.
+- Sound effects: one per frame, the 31 most important per level. **Animals and creatures make no
+  sound yet** – rats, Lara's double and others (next on the list).
+- The original game's short story cues are not played (not on the album).
+- Cut-scene sound can start a moment late (the CD drive seeks to the track).
+- Movies: only 4 of the 11 (the ones that fit the RAM cart), from the title menu only, not yet
+  at their places in the story. *Unfinished Business* is not included.
 - About 9–15 frames per second (9–10 in fights) – see **Frame rate** below.
 
 ## Frame rate
@@ -177,12 +217,15 @@ The version is in the file `VERSION` and is shown small in the corner of the loa
 | Version | What changed |
 |---|---|
 | 1.0 | The whole game from CD: all levels, CD music, PCM sound effects, saving in the RAM cart, all enemies, full passport, loading screen. |
-| 1.2 | Fast start: Caves (the title menu) stays in the RAM cart and is not loaded again – hold A+B+C at start to reload it. |
 | 1.1 | Faster: the two SH2s draw separate halves of the screen, game logic runs while the second SH2 is still drawing, and the next frame is prepared without waiting for the screen refresh (fights 7–8 → 9–10 fps, exploring 9–15 fps). Profiler build (`PROF=1`). Version shown on the loading picture. |
+| 1.2 | Fast start: Caves (the title menu) stays in the RAM cart and is not loaded again – hold A+B+C at start to reload it. |
+| 1.3 | Cut-scenes in the passport, with their voices from the game CD (and fixed: shorter cut-scenes ended at once, a cut-scene could jump to the next level instead of the menu). The game's movies: RoQ player with PWM sound, four movies in the passport. Lara's double, sound effects quieter with distance. |
 
 ## Credits
 - **OpenLara** – XProger and contributors: https://github.com/XProger/OpenLara
-- **Doom 32X: Resurrection** Victor Luchits (viciious) 
+- **Doom 32X: Resurrection** – Victor Luchits (viciious): the RoQ movie decoder (`roq_read.c`,
+  `roq.h`, MIT) and the way its player feeds the PWM; it is also how we knew the 32X can play FMV
+- **RoQ decoder** – Dr. Tim Ferguson (2001)
 - **Sega CD / 32X boot and command framework** – from the Kobo Deluxe CD32X project, built on
   Chilly Willy's Sega CD and 32X examples and toolchain – the CD32X loader started as its CD-boot loader
 - **4MB 32X RAM cart** Victor Luchits, Joseph Fenton, Leo Oliveira, Tiido priimägi and Eric Witt. 
