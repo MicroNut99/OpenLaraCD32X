@@ -78,43 +78,60 @@ Saving is not available in Lara's Home.
 - The original game's short story cues and the cut-scene dialogue are not played (not on the album).
 - The cut-scenes between levels have not been tested on hardware yet.
 - No FMVs; *Unfinished Business* is not included.
-- About 7–9 frames per second – see **Frame rate** below.
+- About 9–14 frames per second (7–8 in big fights) – see **Frame rate** below.
 
 ## Frame rate
-**Status:** about **7–9 frames per second**, measured on real hardware with a profiler build
-(Caves, Lost Valley, a fight). The drawing code is still OpenLara's own 32X renderer.
+**Status:** **9–14 frames per second while exploring, 7–8 in big fights** – measured on real
+hardware with the profiler build (Caves, Lost Valley, the T-rex). Before the screen split
+below it was 7–9 fps everywhere.
 
-Where a frame's ~120 ms go (profiler):
+| Part of a frame | Before the split | With the split |
+|---|---|---|
+| Reading the pad (Sega CD) | 0 ms | 0 ms |
+| Waiting for the screen | 0 ms | 0 ms |
+| Game logic (main SH2) | 10–36 ms | 7–26 ms |
+| Preparing the scene (main SH2) | 19–27 ms | 9–34 ms |
+| Drawing (both SH2s) | 58–111 ms | 43–103 ms |
+| … main SH2 waiting for the second one | 16–30 ms | 0–5 ms |
+| **Whole frame** | **110–145 ms** | **69–111 ms exploring, 120–166 ms in fights** |
 
-| Part | Time per frame |
-|---|---|
-| Reading the pad (Sega CD) | 0 ms |
-| Waiting for the screen | 0 ms |
-| Game logic | 10–36 ms |
-| Preparing the scene (transform, sort) | 19–27 ms |
-| Drawing (both SH2s) | 58–111 ms – of which the main SH2 waits 16–30 ms for the second one |
-
-**What has been done so the CD version keeps that speed:**
+### What was done
+- **Screen split (the big one).** OpenLara's two SH2s used to draw every other polygon and stop
+  after every depth layer to wait for each other, so the picture stayed in the right order.
+  Now the main SH2 draws the top of the screen and the second SH2 the bottom. Each one goes
+  through the whole scene far-to-near and draws only its own rows, so neither ever waits for
+  the other while drawing. Polygons crossing the line between the halves are cut in two.
+- **The line between the halves stays still.** The first version moved it a few rows every
+  frame to balance the work – and a still picture then flashed: a cut polygon places its
+  texture pixels very slightly differently, so pixels near the line changed back and forth.
+  Now the line only moves when one SH2 has been clearly behind for 8 frames in a row.
+- **Why the line is usually not in the middle:** the 32X SH2s are *master and slave* on one
+  shared bus. The master owns the bus; the slave has to ask for it for every memory access,
+  so while both draw, the slave stalls and gets less done. The balancing gives the slave fewer
+  rows when it falls behind.
 - **The game runs from the RAM cart, exactly like a cartridge.** The CD drive is only used to
   load a level and to play music – never while drawing a frame.
-- **Both SH2 processors work on every frame** (OpenLara splits the drawing between them).
 - **Nothing else competes during play.** Once the game loop runs, the Sega CD side goes quiet;
   the 68000 "heartbeat" that stalled the renderer was removed; the diagnostic text is off.
 - **No reload on a restart.** Dying, choosing Restart or loading a save from the same level
-  reuses the level already in the cart (faster restarts – not more frames, but less waiting).
+  reuses the level already in the cart (less waiting, not more frames).
+- **Profiler build:** `PROF=1 bash build.sh` shows the numbers above on screen (F fps,
+  T frame, I input, L logic, W screen wait, X prepare, D draw, S wait for the second SH2;
+  times in ms). It uses the master's watchdog timer – the SH2 free-running timer is taken by
+  OpenLara's start-up code and can't be used for timing.
 
-**Checked and ruled out:**
+### Checked and ruled out
 - **32-bit cart reads.** The cart slot is 16 bits wide and the 32X sets the wait time for every
   cart access, so a cart that can answer 32-bit reads can't make the console read it faster.
   The game already reads 32 bits at a time where it can.
+- **The controller read.** The profiler shows it costs nothing.
 
-- **The controller read.** The profiler shows it costs nothing, so there is nothing to win there.
-
-**In progress:** drawing is the bottleneck. The two SH2s used to take turns layer by layer and
-wait for each other; the next build lets each SH2 draw its own half of the screen (top/bottom,
-balanced every frame), which removes that waiting. Expected: about 1–2 frames per second more.
-A bigger step – letting the second SH2 draw while the first one runs the game logic – would
-need a larger rework of the engine.
+### What's left
+Game logic and scene preparation (together 20–60 ms) run on the main SH2 only, while the
+second SH2 waits for the next drawing job. That is the largest remaining gain, and fights are
+where it shows. Given the shared bus, work that runs mostly from the SH2's own cache (like
+preparing the scene) suits the second SH2 better than more drawing. It needs a larger rework
+of the engine.
 
 ## Credits
 - **OpenLara** – XProger and contributors: https://github.com/XProger/OpenLara
