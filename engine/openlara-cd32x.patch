@@ -2008,10 +2008,10 @@ index dcd12ee..0306ed8 100644
 +#endif
 +        .align  4
 diff --git a/src/platform/32x/main.cpp b/src/platform/32x/main.cpp
-index 42f1f7e..68ac298 100644
+index 42f1f7e..cd2a25e 100644
 --- a/src/platform/32x/main.cpp
 +++ b/src/platform/32x/main.cpp
-@@ -1,10 +1,206 @@
+@@ -1,10 +1,211 @@
  const void* TRACKS_IMA;
  const void* TITLE_SCR;
  
@@ -2215,10 +2215,15 @@ index 42f1f7e..68ac298 100644
 +}
 +#endif
 +
++#if defined(CD32X) && !defined(CD32X_NO_SPLIT) && !defined(CD32X_NO_OVERLAP)
++    #define CD32X_OVERLAP   // OVERLAP-1 (render.cpp): game logic runs while the slave draws
++void renderFinish();        // render.cpp: wait for the slave's rows, clear the ordering table
++#endif
++
  volatile unsigned mars_frt_ovf_count = 0;
  
  extern "C" {
-@@ -24,8 +220,140 @@ int32 gFrameIndex = 0;
+@@ -24,8 +225,142 @@ int32 gFrameIndex = 0;
  int32 g_timer;
  int32 fps;
  
@@ -2349,6 +2354,8 @@ index 42f1f7e..68ac298 100644
 +    profText(4, 32, line);
 +    /* PROF-2: no B line */
 +}
++
++void profDrawFrame() { profDraw(); }    /* OVERLAP-1: flush_c draws the numbers before showing */
 +#endif
 +
  void osSetPalette(const uint16* palette)
@@ -2359,7 +2366,7 @@ index 42f1f7e..68ac298 100644
      void *dst = (void*)&MARS_CRAM;
      memcpy(dst, palette, 256 * 2);
  }
-@@ -35,6 +363,158 @@ int32 osGetSystemTimeMS()
+@@ -35,6 +370,158 @@ int32 osGetSystemTimeMS()
      return int32((mars_pwdt_ovf_count << 8) | SH2_WDT_RTCNT);
  }
  
@@ -2518,7 +2525,7 @@ index 42f1f7e..68ac298 100644
  bool osSaveSettings()
  {
      return false;
-@@ -59,6 +539,7 @@ bool osLoadGame()
+@@ -59,6 +546,7 @@ bool osLoadGame()
  {
      return false;
  }
@@ -2526,7 +2533,7 @@ index 42f1f7e..68ac298 100644
  
  void osJoyVibrate(int32 index, int32 L, int32 R)
  {
-@@ -69,6 +550,9 @@ void updateInput()
+@@ -69,6 +557,9 @@ void updateInput()
  {
      keys = 0;
  
@@ -2536,7 +2543,7 @@ index 42f1f7e..68ac298 100644
      uint16 mask = MARS_SYS_COMM8;
      if (mask & SEGA_CTRL_UP)      keys |= IK_UP;
      if (mask & SEGA_CTRL_RIGHT)   keys |= IK_RIGHT;
-@@ -89,10 +573,53 @@ const void* osLoadScreen(LevelID id)
+@@ -89,10 +580,53 @@ const void* osLoadScreen(LevelID id)
      return TITLE_SCR;
  }
  
@@ -2591,7 +2598,21 @@ index 42f1f7e..68ac298 100644
  
  uint16 pageIndex = 0;
  
-@@ -148,8 +675,19 @@ extern "C" void secondary()
+@@ -145,11 +679,33 @@ extern "C" void secondary()
+         switch (cmd)
+         {            
+             case MARS_CMD_CLEAR:
++            #ifdef CD32X_OVERLAP
++                /* OVERLAP-2: the master no longer waits for the page swap before it prepares
++                   the next frame - so wait here: clear only the page that is NOT on screen.
++                   pageIndex is the master's variable: read it cache-through.  Don't hammer
++                   the VDP register: short pause between reads. */
++                while ((MARS_VDP_FBCTL & MARS_VDP_FS) !=
++                       *(volatile uint16 *)((uint32)&pageIndex | 0x20000000))
++                {
++                    for (volatile int32 k = 0; k < 16; k++) {}
++                }
++            #endif
                  pageClear();
                  break;
              case MARS_CMD_FLUSH:
@@ -2602,16 +2623,16 @@ index 42f1f7e..68ac298 100644
 +            #else
                  flush_ot(1);
 +            #endif
-+                break;
+                 break;
 +#ifdef CD32X
 +            case MARS_CMD_CACHE:            /* OL-2b: a new level is in the cart */
 +                CacheClear();
-                 break;
++                break;
 +#endif
          }
  
          MARS_SYS_COMM4 = 0;
-@@ -195,10 +733,27 @@ int main()
+@@ -195,10 +751,27 @@ int main()
  
      MARS_SYS_COMM4 = 0;
  
@@ -2639,7 +2660,7 @@ index 42f1f7e..68ac298 100644
      int32 fpsFrame = gFrameIndex;
      int32 vsyncRate = (MARS_VDP_DISPMODE & MARS_NTSC_FORMAT) ? 60 : 50;
  
-@@ -211,6 +766,9 @@ int main()
+@@ -211,6 +784,9 @@ int main()
              fpsFrame += vsyncRate;
              fps = fpsCounter;
              fpsCounter = 0;
@@ -2649,7 +2670,7 @@ index 42f1f7e..68ac298 100644
          }
  
          if (vsyncRate == 50)
-@@ -227,6 +785,26 @@ int main()
+@@ -227,6 +803,39 @@ int main()
  
          lastFrame = frame;
  
@@ -2659,7 +2680,11 @@ index 42f1f7e..68ac298 100644
 +        uint32 pt1 = profNow();
 +        gameUpdate(delta);
 +        uint32 pt2 = profNow();
++    #ifdef CD32X_OVERLAP
++        renderFinish();                 /* OVERLAP-1: the slave's rows (= W now) */
++    #else
 +        pageWait();
++    #endif
 +        uint32 pt3 = profNow();
 +        gameRender();
 +        uint32 pt4 = profNow();
@@ -2670,16 +2695,26 @@ index 42f1f7e..68ac298 100644
 +        profAcc[4] += pt4 - profFrameStart;
 +        profFrameStart = pt4;
 +        profFrames++;
++    #ifndef CD32X_OVERLAP
 +        profDraw();
 +        pageFlip();
++    #endif
++    #else
++    #ifdef CD32X_OVERLAP
++        updateInput();
++        gameUpdate(delta);              /* OVERLAP-1: runs while the slave still draws        */
++        renderFinish();                 /* the slave's rows done (it shows the frame itself)  */
++        gameRender();                   /* OVERLAP-2: prepare at once - clear/draw wait for   */
++                                        /* the page swap themselves (secondary, flush_c)      */
 +    #else
          updateInput();
  
          gameUpdate(delta);
-@@ -236,6 +814,7 @@ int main()
+@@ -236,6 +845,8 @@ int main()
          gameRender();
  
          pageFlip();
++    #endif
 +    #endif
  
          fpsCounter++;
@@ -2722,10 +2757,10 @@ index 4a89334..64f14af 100644
      uint8* ptr = (uint8*)pixel;
  
 diff --git a/src/platform/32x/render.cpp b/src/platform/32x/render.cpp
-index a0c5c88..867129e 100644
+index a0c5c88..1b06a10 100644
 --- a/src/platform/32x/render.cpp
 +++ b/src/platform/32x/render.cpp
-@@ -46,6 +46,43 @@ enum FaceType {
+@@ -46,6 +46,70 @@ enum FaceType {
  #define FACE_GOURAUD    (2 << FACE_TYPE_SHIFT)
  #define FACE_TEXTURE    0x3FFF
  
@@ -2766,10 +2801,37 @@ index a0c5c88..867129e 100644
 +    #define CD32X_SPLIT     // each SH2 draws its own part of the screen (flush_ot, flush_c)
 +#endif
 +
++/* =========================================================================================
++ * CD32X OVERLAP-1 - the game logic runs while the slave is still drawing  (needs the split)
++ * -----------------------------------------------------------------------------------------
++ * Profiler: game logic (L, 10-39 ms) and scene preparation (X, 9-34 ms) run on the master
++ *   only, while the slave waits for its drawing job.
++ * Ideal: the slave draws frame N while the master prepares frame N+1.  That needs the scene
++ *   lists twice (gVertices 40 KB + gFaces 30 KB + gOT 2.5 KB); only about 30 KB of SDRAM is
++ *   free (bss ends at 0x06037880), so it does not fit.
++ * What fits, with no extra memory: the master draws its rows, then returns at once and runs
++ *   the NEXT frame's input + game logic while the slave is still drawing.  The game logic does
++ *   not touch what the slave reads (gVertices, gFaces, gOT, textures).
++ *   - The slave shows the finished frame itself (flush_ot(1) writes MARS_VDP_FBCTL), but only
++ *     after the master's rows are done too: COMM6 = 0x100 | page (job started),
++ *     0x200 set = master's rows finished.  Showing it any earlier would tear the picture.
++ *   - renderFinish() (main loop, after the game logic) waits for the slave, moves the split
++ *     line if needed (SPLIT-2 rules) and clears the ordering table for the next frame.
++ *   - The master's pageFlip() is not used in the game loop any more.
++ * OVERLAP-2: the main loop does not wait for the page swap (vblank) either.  OVERLAP-1 showed
++ *   the master waiting 3-14 ms per frame for it before preparing the next frame - but
++ *   preparing doesn't touch the screen.  Now only the slave's clear job (secondary) and the
++ *   master's own drawing (flush_c) wait for the swap.
++ * Switch off: build with -DCD32X_NO_OVERLAP.
++ * ========================================================================================= */
++#if defined(CD32X_SPLIT) && !defined(CD32X_NO_OVERLAP)
++    #define CD32X_OVERLAP
++#endif
++
  #include "rasterizer.h"
  
  extern Level level;
-@@ -115,6 +152,9 @@ X_INLINE Face* faceAdd(int32 depth)
+@@ -115,6 +179,9 @@ X_INLINE Face* faceAdd(int32 depth)
  
  extern "C" {
      X_NOINLINE void drawPoly(uint32 flags, VertexLink* v, const ColorIndex* tile);
@@ -2779,7 +2841,7 @@ index a0c5c88..867129e 100644
      X_INLINE void drawTriangle(uint32 flags, VertexLink* v, const ColorIndex* tile);
      X_INLINE void drawQuad(uint32 flags, VertexLink* v, const ColorIndex* tile);
  }
-@@ -595,6 +635,149 @@ int32 sphereIsVisible_c(int32 sx, int32 sy, int32 sz, int32 r)
+@@ -595,6 +662,160 @@ int32 sphereIsVisible_c(int32 sx, int32 sy, int32 sz, int32 r)
      return 1;
  }
  
@@ -2923,13 +2985,24 @@ index a0c5c88..867129e 100644
 +            }
 +        }
 +    }
++#ifdef CD32X_OVERLAP
++    if (bit)
++    {
++        // OVERLAP-1: show the frame once the master's rows are finished too (COMM6 bit 9)
++        while (!(MARS_SYS_COMM6 & 0x200))
++        {
++            for (volatile int32 k = 0; k < 16; k++) {}  // don't hammer the COMM register
++        }
++        MARS_VDP_FBCTL = MARS_SYS_COMM6 & 1;            // takes effect at the next vblank
++    }
++#endif
 +    CacheClear();
 +}
 +#else
  void flush_ot(int32 bit)
  {
      VertexLink v[4 + 4];
-@@ -714,12 +897,40 @@ void flush_ot(int32 bit)
+@@ -714,13 +935,42 @@ void flush_ot(int32 bit)
              while (MARS_SYS_COMM2 > i);
          } else {
              MARS_SYS_COMM2 = i;
@@ -2954,7 +3027,7 @@ index a0c5c88..867129e 100644
 +#ifdef CD32X_SPLIT
 +// SPLIT-2: the master's watchdog timer (main() runs it): 178 us per tick
 +extern "C" volatile uint32 mars_pwdt_ovf_count;
-+
+ 
 +static uint32 splitTicks()
 +{
 +    uint32 o1, o2;
@@ -2967,10 +3040,12 @@ index a0c5c88..867129e 100644
 +    return (o1 << 8) | c;
 +}
 +#endif
- 
++
++#ifndef CD32X_OVERLAP
  void flush_c()
  {
-@@ -750,10 +961,53 @@ void flush_c()
+ #ifdef PROFILING
+@@ -750,10 +1000,53 @@ void flush_c()
      fast_memcpy((void*)0xC0000000, &block_render_start, size >> 2);
  #endif
      PROFILE(CNT_FLUSH);
@@ -3024,7 +3099,7 @@ index a0c5c88..867129e 100644
      MARS_SYS_COMM2 = OT_SIZE;
      MARS_SYS_COMM6 = OT_SIZE;
      MARS_SYS_COMM4 = MARS_CMD_FLUSH;
-@@ -761,8 +1015,12 @@ void flush_c()
+@@ -761,14 +1054,115 @@ void flush_c()
      flush_ot(0);
  
      MARS_WAIT();
@@ -3037,7 +3112,110 @@ index a0c5c88..867129e 100644
  
  #ifdef ON_CHIP_RENDER
      CacheControl(0);
-@@ -899,6 +1157,108 @@ extern "C" X_NOINLINE void drawPoly(uint32 flags, VertexLink* v, const ColorInde
+     CacheControl(SH2_CCTL_CP | SH2_CCTL_CE);
+ #endif
+ }
++#else // CD32X_OVERLAP
++extern uint16 pageIndex;                            // main.cpp: the page shown / to be shown
++void pageWait();                                    // main.cpp: wait until pageIndex is shown
++
++static int32 gSplitY = FRAME_HEIGHT / 2;            // SPLIT-1: first row the slave draws
++static int32 gSplitVote = 0;                        // SPLIT-2: frames in a row one SH2 was late
++static int32 gRenderPending = 0;                    // OVERLAP-1: the slave has (or had) a frame
++
++#ifdef CD32X_PROF
++    #define SPLIT_MIN   64                          // the profiler text (rows 4-57) is the master's
++#else
++    #define SPLIT_MIN   16
++#endif
++#define SPLIT_MAX   (FRAME_HEIGHT - 16)
++
++// OVERLAP-1: called by the main loop after the game logic (and by flush_c as a safety net)
++void renderFinish()
++{
++    if (!gRenderPending)
++        return;
++    gRenderPending = 0;
++
++    uint32 t0 = splitTicks();
++    MARS_WAIT();                                    // the slave's rows (it also shows the frame)
++    uint32 late = splitTicks() - t0;                // watchdog ticks, 178 us each
++  #ifdef CD32X_PROF
++    {
++        extern volatile uint32 gProfSync;
++        gProfSync += late;                          // S
++    }
++  #endif
++
++    // SPLIT-2 rules, measured after the game logic now: the master's share = its rows + logic
++    if (late > 22) {                                // slave > ~4 ms late: master takes 4 more rows
++        gSplitVote = (gSplitVote > 0 ? gSplitVote : 0) + 1;
++    } else if (late == 0) {                         // slave was done first: give it 4 more rows
++        gSplitVote = (gSplitVote < 0 ? gSplitVote : 0) - 1;
++    } else {
++        gSplitVote = 0;
++    }
++
++    if (gSplitVote >= 8) {
++        if (gSplitY < SPLIT_MAX) gSplitY += 4;
++        gSplitVote = 0;
++    } else if (gSplitVote <= -8) {
++        if (gSplitY > SPLIT_MIN) gSplitY -= 4;
++        gSplitVote = 0;
++    }
++
++    dmaFill(gOT, 0, OT_SIZE * sizeof(gOT[0]));     // the slave is done with it
++}
++
++void flush_c()
++{
++    renderFinish();                                 // never start while the slave has a frame
++
++    gVerticesBase = gVertices;
++
++    if (gFacesBase == gFaces)
++    {
++        MARS_WAIT();                                // a clear() may still be running
++        pageWait();                                 // OVERLAP-2: the last swap must be done
++        pageIndex ^= 1;                             // nothing to draw: show the page as it is
++        MARS_VDP_FBCTL = pageIndex;
++        return;
++    }
++
++    gFacesBase = gFaces;
++
++  #ifdef CD32X_PROF
++    extern volatile uint32 gProfDraw;
++    uint32 profNow();
++    uint32 profT0 = profNow();
++  #endif
++
++    MARS_WAIT();                                    // clear() done
++    pageWait();                                     // OVERLAP-2: the last frame is on screen,
++                                                    // so this page is free (no-op after clear)
++    CacheClear();
++
++    pageIndex ^= 1;                                 // the page this frame goes to
++    MARS_SYS_COMM2 = gSplitY;
++    MARS_SYS_COMM6 = 0x100 | pageIndex;             // job started, master's rows not done yet
++    MARS_SYS_COMM4 = MARS_CMD_FLUSH;
++
++    flush_ot(0);                                    // the master's rows
++
++  #ifdef CD32X_PROF
++    void profDrawFrame();
++    profDrawFrame();                                // the numbers, before the frame is shown
++    gProfDraw += profNow() - profT0;
++  #endif
++
++    MARS_SYS_COMM6 = 0x300 | pageIndex;             // master's rows done: the slave may show it
++    gRenderPending = 1;                             // back to the game - the slave finishes
++}
++#endif // CD32X_OVERLAP
+ 
+ void renderInit()
+ {
+@@ -899,6 +1293,108 @@ extern "C" X_NOINLINE void drawPoly(uint32 flags, VertexLink* v, const ColorInde
      rasterize(flags, top, tile);
  }
  

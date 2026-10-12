@@ -78,12 +78,12 @@ Saving is not available in Lara's Home.
 - The original game's short story cues and the cut-scene dialogue are not played (not on the album).
 - The cut-scenes between levels have not been tested on hardware yet.
 - No FMVs; *Unfinished Business* is not included.
-- About 9–14 frames per second (7–8 in big fights) – see **Frame rate** below.
+- About 9–15 frames per second (9–10 in fights) – see **Frame rate** below.
 
 ## Frame rate
-**Status:** **9–14 frames per second while exploring, 7–8 in big fights** – measured on real
-hardware with the profiler build (Caves, Lost Valley, the T-rex). Before the screen split
-below it was 7–9 fps everywhere.
+**Status:** **9–15 frames per second while exploring, 9–10 in fights with raptors** – measured
+on real hardware with the profiler build (Caves, Lost Valley, raptors, the T-rex). When this
+work started it was 7–9 fps everywhere.
 
 | Part of a frame | Before the split | With the split |
 |---|---|---|
@@ -95,6 +95,9 @@ below it was 7–9 fps everywhere.
 | … main SH2 waiting for the second one | 16–30 ms | 0–5 ms |
 | **Whole frame** | **110–145 ms** | **69–111 ms exploring, 120–166 ms in fights** |
 
+With the overlap (below) on top of the split, fights with raptors take 100–114 ms per frame
+(9–10 fps, was 116–166 ms) and exploring 64–110 ms.
+
 ### What was done
 - **Screen split (the big one).** OpenLara's two SH2s used to draw every other polygon and stop
   after every depth layer to wait for each other, so the picture stayed in the right order.
@@ -105,6 +108,14 @@ below it was 7–9 fps everywhere.
   frame to balance the work – and a still picture then flashed: a cut polygon places its
   texture pixels very slightly differently, so pixels near the line changed back and forth.
   Now the line only moves when one SH2 has been clearly behind for 8 frames in a row.
+- **Game logic overlaps the drawing.** The main SH2 draws its rows, then goes straight on to
+  the next frame's pad reading and game logic while the second SH2 is still drawing. The
+  second SH2 puts the finished frame on screen itself – but only once both halves are done,
+  so the picture never tears. The inventory stays at a solid 30 fps.
+- **No waiting for the screen refresh before preparing the next frame.** A finished frame
+  only appears at the next refresh (every 16.7 ms). The main SH2 used to wait for that before
+  starting the next frame (3–14 ms per frame once the logic overlapped). Preparing the scene
+  doesn't need the screen, so now only clearing and drawing wait for it.
 - **Why the line is usually not in the middle:** the 32X SH2s are *master and slave* on one
   shared bus. The master owns the bus; the slave has to ask for it for every memory access,
   so while both draw, the slave stalls and gets less done. The balancing gives the slave fewer
@@ -127,11 +138,9 @@ below it was 7–9 fps everywhere.
 - **The controller read.** The profiler shows it costs nothing.
 
 ### What's left
-Game logic and scene preparation (together 20–60 ms) run on the main SH2 only, while the
-second SH2 waits for the next drawing job. That is the largest remaining gain, and fights are
-where it shows. Given the shared bus, work that runs mostly from the SH2's own cache (like
-preparing the scene) suits the second SH2 better than more drawing. It needs a larger rework
-of the engine.
+Preparing the scene (9–34 ms) still runs on the main SH2 while the second SH2 waits. Letting
+the second SH2 draw one frame while the main SH2 prepares the next would need the scene lists
+twice (about 72 KB); only about 30 KB of the 32X's fast RAM is free, so it doesn't fit as is.
 
 ## Credits
 - **OpenLara** – XProger and contributors: https://github.com/XProger/OpenLara

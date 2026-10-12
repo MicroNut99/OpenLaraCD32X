@@ -22,10 +22,11 @@ src/fixed/lara.h         Start opens the inventory
 src/platform/32x/Makefile      make CD32X=1  (+ PROF=1 for the profiler)
 src/platform/32x/asm/data.s    splash picture instead of built-in levels
 src/platform/32x/main.cpp      CD commands, level loading into the cart, splash, cart saves,
-                               profiler (CD32X_PROF)
+                               profiler (CD32X_PROF), game loop for the overlap
 src/platform/32x/sound.cpp     CD music and PCM sound effects
 src/platform/32x/render.cpp    screen split: each SH2 draws its own part of the screen
-                               (CD32X_SPLIT - see the comment block at the top)
+                               (CD32X_SPLIT) and the game logic overlaps the drawing
+                               (CD32X_OVERLAP) - see the comment blocks at the top
 src/platform/32x/rasterizer.h  sprites clip to the SH2's own rows (screen split)
 ```
 data/SPLASH.BIN is made by build.sh from splash.jpg.
