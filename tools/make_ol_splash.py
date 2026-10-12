@@ -3,7 +3,8 @@
     python3 make_ol_splash.py splash.jpg OpenLara-src/src/platform/32x/data/SPLASH.BIN
 SPLASH.BIN = 256 palette entries (32X BGR555, big-endian, 512 bytes) + 320 x 180 pixels (bytes).
 Indices 0-251: the picture.  252 black, 253 bar background, 254 bar (red), 255 bar edge.
-The picture is scaled to 320 wide and cropped/padded to 180 high (16:9)."""
+The picture is scaled to 320 wide and cropped/padded to 180 high (16:9).
+If a file VERSION sits next to the picture, its text (e.g. v1.1) is drawn in the bottom-right corner."""
 import struct, sys
 try:
     from PIL import Image
@@ -25,6 +26,20 @@ def main():
     img = img.resize((W, h), Image.LANCZOS)
     canvas = Image.new("RGB", (W, H), (0, 0, 0))
     canvas.paste(img, (0, (H - h) // 2))
+    # v1.1: the version (file VERSION next to the picture) small in the bottom-right corner,
+    # drawn before the colours are picked so it gets its own clean colour
+    import os
+    vfile = os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), "VERSION")
+    if os.path.exists(vfile):
+        from PIL import ImageDraw, ImageFont
+        ver = open(vfile).read().strip()
+        draw = ImageDraw.Draw(canvas)
+        font = ImageFont.load_default()
+        box = draw.textbbox((0, 0), ver, font=font)
+        x, y = W - (box[2] - box[0]) - 4, H - (box[3] - box[1]) - 5
+        draw.text((x + 1, y + 1), ver, fill=(0, 0, 0), font=font)          # shadow
+        draw.text((x, y), ver, fill=(210, 210, 210), font=font)
+        print("==> splash: version %s" % ver)
     q = canvas.quantize(colors=NCOL, method=Image.MEDIANCUT)
     pal = q.getpalette()[:NCOL * 3]
     pal += [0] * (NCOL * 3 - len(pal))
